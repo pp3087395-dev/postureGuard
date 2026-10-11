@@ -277,6 +277,16 @@
               </div>
             </div>
 
+            <!-- Visible Background Monitoring Note -->
+            <div class="bg-monitoring-note" id="bgMonitoringNote">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+              </svg>
+              <span>Keep this tab open for background monitoring. Video never leaves your device.</span>
+            </div>
+
             <!-- Canvas Bottom Controls -->
             <div class="video-footer-controls">
               <div class="controls-group">
@@ -303,6 +313,16 @@
                   </svg>
                   Reset
                 </button>
+
+                <!-- Floating Mini Window (Document PiP API) -->
+                <button id="btnFloatingPip" class="btn btn-outline" aria-label="Open Floating Mini Window (Always on Top)" title="Always-on-top mini window for background multitasking">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                    <rect x="12" y="9" width="8" height="6" rx="1" ry="1" fill="currentColor" fill-opacity="0.3"></rect>
+                  </svg>
+                  <span id="btnFloatingPipText">Floating Mini Window</span>
+                </button>
+                <span id="pipUnsupportedNote" class="pip-unsupported-note" style="display: none;">Supported in Chrome/Edge desktop</span>
               </div>
 
               <div class="mirror-toggle-group">

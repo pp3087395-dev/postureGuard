@@ -17,6 +17,9 @@ function isGoodPosture(label) {
   return label.trim().toLowerCase().includes('good');
 }
 
+// Background tab inference interval (~4.5 FPS)
+const BG_INTERVAL_MS = 220;
+
 // --- Global Application State ---
 const state = {
   // Model & Vision
@@ -27,6 +30,8 @@ const state = {
   isMonitoring: false,
   isPaused: false,
   animationFrameId: null,
+  backgroundIntervalId: null,
+  isInBackground: false,
   mirrorFeed: true,
 
   // Prediction Smoothing Buffer (10-frame sliding window)
@@ -52,6 +57,9 @@ const state = {
   isMuted: false,
   audioContext: null,
   notificationsEnabled: false,
+
+  // Document Picture-in-Picture Floating Window
+  pipWindow: null,
 
   // Simulation Mode (for demo/eval when weights are pending)
   isSimulatedMode: false,
@@ -178,6 +186,11 @@ const DOM = {
   retryInitBtn: document.getElementById('retryInitBtn'),
   demoSimulateBtn: document.getElementById('demoSimulateBtn'),
   mirrorToggle: document.getElementById('mirrorToggle'),
+
+  // Document PiP Controls
+  btnFloatingPip: document.getElementById('btnFloatingPip'),
+  btnFloatingPipText: document.getElementById('btnFloatingPipText'),
+  pipUnsupportedNote: document.getElementById('pipUnsupportedNote'),
 
   // Analysis Cards
   statusBannerBox: document.getElementById('statusBannerBox'),
@@ -328,62 +341,115 @@ async function startWebcam() {
 }
 
 // ============================================================================
-// 2. Real-Time Inference & Pose Estimation Loop
+// 2. Real-Time Inference & Pose Estimation Loop (Foreground & Background)
 // ============================================================================
 
 /**
- * Main requestAnimationFrame loop:
- * 1. Updates webcam feed
- * 2. Runs PoseNet keypoint estimation
- * 3. Classifies pose probabilities
- * 4. Draws webcam frame and skeleton onto canvas
- * 5. Applies smoothing and triggers smart alerts
+ * Executes a single inference step.
+ * When isBackground is false: draws frame and skeleton to canvas.
+ * When isBackground is true (tab hidden): skips canvas drawing to save GPU/battery
+ * but continues PoseNet estimation, smoothing, bad posture alerts & PiP updates.
  */
-async function predictLoop() {
-  if (!state.isMonitoring || state.isPaused) return;
+async function stepInference(isBackground = false) {
+  if (!state.isMonitoring || state.isPaused || !state.model || !state.webcam) return;
 
   try {
+    // 1. Update webcam frame
     state.webcam.update();
 
-    // 1. Estimate Pose: returns { pose, posenetOutput }
+    // 2. Pose estimation & classification
     const { pose, posenetOutput } = await state.model.estimatePose(state.webcam.canvas);
-
-    // 2. Classify Pose against Teachable Machine classes
     const predictions = await state.model.predict(posenetOutput);
 
-    // 3. Draw webcam video frame onto destination canvas
-    DOM.ctx.clearRect(0, 0, DOM.canvas.width, DOM.canvas.height);
-    DOM.ctx.drawImage(state.webcam.canvas, 0, 0, DOM.canvas.width, DOM.canvas.height);
+    // 3. Render to canvas only when visible
+    if (!isBackground) {
+      DOM.ctx.clearRect(0, 0, DOM.canvas.width, DOM.canvas.height);
+      DOM.ctx.drawImage(state.webcam.canvas, 0, 0, DOM.canvas.width, DOM.canvas.height);
 
-    // 4. Draw Skeleton & Landmarks if a person is in frame
-    if (pose) {
-      const minPartConfidence = 0.5;
-      if (typeof tmPose.drawKeypoints === 'function') {
-        tmPose.drawKeypoints(pose.keypoints, minPartConfidence, DOM.ctx);
+      if (pose) {
+        const minPartConfidence = 0.5;
+        if (typeof tmPose.drawKeypoints === 'function') {
+          tmPose.drawKeypoints(pose.keypoints, minPartConfidence, DOM.ctx);
+        }
+        if (typeof tmPose.drawSkeleton === 'function') {
+          tmPose.drawSkeleton(pose.keypoints, minPartConfidence, DOM.ctx);
+        }
       }
-      if (typeof tmPose.drawSkeleton === 'function') {
-        tmPose.drawSkeleton(pose.keypoints, minPartConfidence, DOM.ctx);
-      }
-      // Process posture predictions with smoothing
-      processPredictions(predictions, true);
-    } else {
-      // No person visible in frame
-      processPredictions(null, false);
     }
 
-    // 5. Compute rolling FPS
+    // 4. Process predictions with 10-frame smoothing buffer
+    processPredictions(predictions, Boolean(pose));
+
+    // 5. Update Floating Mini Window (Document PiP) if open
+    if (state.pipWindow) {
+      updatePipUI();
+    }
+
+    // 6. Update FPS indicator
     updateFPS();
-
   } catch (err) {
-    console.error('[PostureGuard] Inference loop exception:', err);
+    console.error('[PostureGuard] Inference step error:', err);
   }
-
-  // Schedule next frame
-  state.animationFrameId = requestAnimationFrame(predictLoop);
 }
 
 /**
- * Computes rolling average over the last N frames to suppress prediction jitter.
+ * Manages dual-mode execution loop:
+ * - When document.hidden is false: uses requestAnimationFrame for full 30 FPS visual smoothness.
+ * - When document.hidden is true: switches to setInterval at ~4-5 FPS (220ms) so background monitoring
+ *   never pauses even when the user switches tabs or windows.
+ */
+function startInferenceLoop() {
+  stopInferenceLoop();
+  if (!state.isMonitoring || state.isPaused) return;
+
+  if (document.hidden) {
+    // Tab is hidden: run background loop at ~4-5 FPS
+    state.isInBackground = true;
+    console.log('[PostureGuard] Tab hidden: running background monitoring at ~4-5 FPS');
+    state.backgroundIntervalId = setInterval(async () => {
+      if (state.isMonitoring && !state.isPaused) {
+        await stepInference(true);
+      }
+    }, BG_INTERVAL_MS);
+  } else {
+    // Tab is visible: run requestAnimationFrame loop
+    state.isInBackground = false;
+    const loop = async () => {
+      if (!state.isMonitoring || state.isPaused || document.hidden) return;
+      await stepInference(false);
+      if (!document.hidden && state.isMonitoring && !state.isPaused) {
+        state.animationFrameId = requestAnimationFrame(loop);
+      }
+    };
+    state.animationFrameId = requestAnimationFrame(loop);
+  }
+}
+
+/**
+ * Stops both requestAnimationFrame and setInterval loops
+ */
+function stopInferenceLoop() {
+  if (state.animationFrameId) {
+    cancelAnimationFrame(state.animationFrameId);
+    state.animationFrameId = null;
+  }
+  if (state.backgroundIntervalId) {
+    clearInterval(state.backgroundIntervalId);
+    state.backgroundIntervalId = null;
+  }
+}
+
+/**
+ * Handles tab visibility changes to transition seamlessly between loops
+ */
+function handleVisibilityChange() {
+  if (!state.isMonitoring || state.isPaused) return;
+  console.log('[PostureGuard] Visibility changed: document.hidden =', document.hidden);
+  startInferenceLoop();
+}
+
+/**
+ * Computes rolling average over last N frames to suppress prediction jitter.
  * Applies detection threshold (>= 80%).
  */
 function processPredictions(predictions, hasPose) {
@@ -465,11 +531,11 @@ function setDetectedPosture(postureName, probability) {
 }
 
 // ============================================================================
-// 3. Smart Alert Engine & Debug Telemetry
+// 3. Smart Alert Engine & Notifications
 // ============================================================================
 
 /**
- * Updates the small debug telemetry line:
+ * Updates small debug telemetry line:
  * label, isGood (true/false), badTimerSeconds
  */
 function updateDebugLine(label, isGood, badTimerSeconds) {
@@ -537,7 +603,9 @@ function handlePostureAlertTimer(posture) {
 }
 
 /**
- * Fires synthesized Web Audio chime, alert banner, and desktop notification
+ * Fires synthesized Web Audio chime, alert banner, and desktop Notification.
+ * When tab is hidden or notification permission is granted, sends a persistent
+ * browser notification with requireInteraction: true.
  */
 function triggerPostureAlert(badPostureName, secondsElapsed) {
   state.totalAlertsTriggered++;
@@ -552,13 +620,16 @@ function triggerPostureAlert(badPostureName, secondsElapsed) {
     `You have maintained ${badPostureName.toLowerCase()} continuously for ${secondsElapsed} seconds. Please adjust your back and neck alignment.`
   );
 
-  // 3. Send system desktop notification if enabled
-  if (state.notificationsEnabled && 'Notification' in window && Notification.permission === 'granted') {
+  // 3. Send browser Notification (title "PostureGuard", body with the tip for that posture, requireInteraction: true)
+  if ('Notification' in window && Notification.permission === 'granted') {
+    const meta = getPostureMeta(badPostureName);
+    const tipText = meta.tip || 'Sit upright and align your spine.';
     try {
-      new Notification('PostureGuard — Posture Alert', {
-        body: `Continuous ${badPostureName} detected (${secondsElapsed}s). Time to sit upright!`,
+      new Notification('PostureGuard', {
+        body: `${badPostureName} detected (${secondsElapsed}s)! ${tipText}`,
         icon: 'favicon.ico',
-        silent: true // Audio is already synthesized via Web Audio API
+        requireInteraction: true, // Stays until user dismisses it
+        tag: 'postureguard-alert'
       });
     } catch (notifErr) {
       console.warn('[PostureGuard] Notification error:', notifErr);
@@ -636,7 +707,151 @@ function hideAlertBanner() {
 }
 
 // ============================================================================
-// 4. Session Telemetry & Dashboard Tracking
+// 4. Document Picture-in-Picture Floating Mini Window
+// ============================================================================
+
+/**
+ * Checks support for the Document Picture-in-Picture API.
+ * If unsupported, hides button and shows desktop note.
+ */
+function checkPipSupport() {
+  const isSupported = ('documentPictureInPicture' in window);
+  if (DOM.btnFloatingPip) {
+    DOM.btnFloatingPip.style.display = isSupported ? 'inline-flex' : 'none';
+  }
+  if (DOM.pipUnsupportedNote) {
+    DOM.pipUnsupportedNote.style.display = isSupported ? 'none' : 'inline-block';
+  }
+}
+
+/**
+ * Toggles always-on-top Document Picture-in-Picture window
+ */
+async function togglePipWindow() {
+  if (!('documentPictureInPicture' in window)) return;
+
+  if (state.pipWindow && !state.pipWindow.closed) {
+    state.pipWindow.close();
+    state.pipWindow = null;
+    updatePipButtonText();
+    return;
+  }
+
+  try {
+    const pipWindow = await window.documentPictureInPicture.requestWindow({
+      width: 330,
+      height: 220
+    });
+    state.pipWindow = pipWindow;
+
+    // Inject styles and markup into PiP document
+    pipWindow.document.title = 'PostureGuard — Mini Coach';
+    pipWindow.document.head.innerHTML = `
+      <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        body { background: #0a1120; color: #f8fafc; padding: 14px; display: flex; flex-direction: column; justify-content: space-between; height: 100vh; user-select: none; }
+        .pip-header { display: flex; align-items: center; justify-content: space-between; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #38bdf8; font-weight: 700; }
+        .pip-status-box { background: rgba(18, 30, 56, 0.85); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px; padding: 12px; text-align: center; margin: 8px 0; }
+        .pip-badge { display: inline-block; padding: 6px 14px; border-radius: 9999px; font-weight: 700; font-size: 14px; margin-bottom: 6px; }
+        .badge-good { background: rgba(6, 78, 59, 0.9); color: #a7f3d0; border: 1px solid #10b981; }
+        .badge-bad { background: rgba(120, 53, 15, 0.9); color: #fde68a; border: 1px solid #f59e0b; }
+        .badge-neutral { background: rgba(30, 41, 59, 0.9); color: #cbd5e1; border: 1px solid #64748b; }
+        .pip-timer { font-family: monospace; font-size: 12px; color: #94a3b8; }
+        .pip-timer.active-alert { color: #f87171; font-weight: bold; }
+        .pip-footer { display: flex; gap: 8px; justify-content: center; }
+        .btn-pip-stop { background: #ef4444; color: white; border: none; padding: 6px 18px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+        .btn-pip-stop:hover { background: #dc2626; }
+      </style>
+    `;
+
+    pipWindow.document.body.innerHTML = `
+      <div class="pip-header">
+        <span>PostureGuard Mini</span>
+        <span id="pipIndicator">🟢 Active</span>
+      </div>
+      <div class="pip-status-box">
+        <div id="pipBadge" class="pip-badge badge-neutral">${state.currentActivePosture}</div>
+        <div id="pipTimer" class="pip-timer">Timer: 0s</div>
+      </div>
+      <div class="pip-footer">
+        <button id="pipStopBtn" class="btn-pip-stop">Stop</button>
+      </div>
+    `;
+
+    pipWindow.document.getElementById('pipStopBtn').addEventListener('click', () => {
+      pauseMonitoring();
+      if (DOM.btnStopSession) {
+        showSessionSummary();
+      }
+      pipWindow.close();
+    });
+
+    pipWindow.addEventListener('pagehide', () => {
+      state.pipWindow = null;
+      updatePipButtonText();
+    });
+
+    updatePipUI();
+    updatePipButtonText();
+  } catch (pipErr) {
+    console.warn('[PostureGuard] Failed to open Document PiP window:', pipErr);
+  }
+}
+
+/**
+ * Updates content inside Document Picture-in-Picture window
+ */
+function updatePipUI() {
+  if (!state.pipWindow || state.pipWindow.closed) return;
+  const doc = state.pipWindow.document;
+  const badgeEl = doc.getElementById('pipBadge');
+  const timerEl = doc.getElementById('pipTimer');
+  const indicatorEl = doc.getElementById('pipIndicator');
+
+  if (badgeEl) {
+    badgeEl.textContent = state.currentActivePosture;
+    if (isGoodPosture(state.currentActivePosture)) {
+      badgeEl.className = 'pip-badge badge-good';
+    } else if (state.currentActivePosture.includes('Detect') || state.currentActivePosture.includes('No Person')) {
+      badgeEl.className = 'pip-badge badge-neutral';
+    } else {
+      badgeEl.className = 'pip-badge badge-bad';
+    }
+  }
+
+  if (timerEl) {
+    if (state.badPostureStartTime) {
+      const elapsedSec = Math.floor((Date.now() - state.badPostureStartTime) / 1000);
+      if (state.isAlertBannerShowing) {
+        timerEl.textContent = `ALERT ACTIVE (${elapsedSec}s)`;
+        timerEl.className = 'pip-timer active-alert';
+      } else {
+        const remaining = Math.max(0, state.alertDelaySeconds - elapsedSec);
+        timerEl.textContent = `Alert in ${remaining}s (${elapsedSec}s)`;
+        timerEl.className = 'pip-timer';
+      }
+    } else {
+      timerEl.textContent = 'Timer: 0s';
+      timerEl.className = 'pip-timer';
+    }
+  }
+
+  if (indicatorEl) {
+    indicatorEl.textContent = state.isPaused ? '⏸️ Paused' : '🟢 Active';
+  }
+}
+
+function updatePipButtonText() {
+  if (!DOM.btnFloatingPipText) return;
+  if (state.pipWindow && !state.pipWindow.closed) {
+    DOM.btnFloatingPipText.textContent = 'Close Mini Window';
+  } else {
+    DOM.btnFloatingPipText.textContent = 'Floating Mini Window';
+  }
+}
+
+// ============================================================================
+// 5. Session Telemetry & Dashboard Tracking
 // ============================================================================
 
 /**
@@ -720,7 +935,7 @@ function updateDashboardUI() {
 }
 
 /**
- * Dynamically renders the distribution bar segments and legends
+ * Dynamically renders distribution bar segments and legends
  * based on the exact classes loaded from metadata.json
  */
 function renderDistributionUI() {
@@ -806,7 +1021,7 @@ function drawTimelineCanvas() {
 }
 
 // ============================================================================
-// 5. Session Stop & Summary Report Modal
+// 6. Session Stop & Summary Report Modal
 // ============================================================================
 
 /**
@@ -926,13 +1141,30 @@ function generatePersonalizedAdvice(score) {
 }
 
 // ============================================================================
-// 6. Interactive Controls & UI Handlers
+// 7. Interactive Controls & UI Handlers
 // ============================================================================
 
 /**
  * Starts or resumes posture monitoring session
  */
 async function startMonitoring() {
+  // Ask for Notification permission when user clicks Start
+  if ('Notification' in window && Notification.permission === 'default') {
+    try {
+      const perm = await Notification.requestPermission();
+      state.notificationsEnabled = (perm === 'granted');
+      if (perm === 'granted') {
+        DOM.notificationBtnText.textContent = 'Desktop Alerts: Enabled';
+        DOM.requestNotificationBtn.classList.add('btn-primary');
+        DOM.requestNotificationBtn.classList.remove('btn-outline');
+      }
+    } catch (notifErr) {
+      console.warn('[PostureGuard] Notification request error:', notifErr);
+    }
+  } else if ('Notification' in window) {
+    state.notificationsEnabled = (Notification.permission === 'granted');
+  }
+
   if (!state.isModelLoaded) {
     const loaded = await loadModel();
     if (!loaded) return;
@@ -961,8 +1193,9 @@ async function startMonitoring() {
     startSessionTracking();
   }
 
-  // Launch inference loop
-  predictLoop();
+  // Launch foreground or background inference loop depending on visibility
+  startInferenceLoop();
+  updatePipUI();
 }
 
 /**
@@ -970,15 +1203,13 @@ async function startMonitoring() {
  */
 function pauseMonitoring() {
   state.isPaused = true;
-  if (state.animationFrameId) {
-    cancelAnimationFrame(state.animationFrameId);
-    state.animationFrameId = null;
-  }
+  stopInferenceLoop();
 
   DOM.sessionStatusPill.textContent = 'Paused';
   DOM.sessionStatusPill.className = 'status-indicator status-paused';
   DOM.btnPlayPauseText.textContent = 'Resume Monitoring';
   DOM.btnPlayPauseIcon.innerHTML = `<polygon points="5 3 19 12 5 21 5 3"></polygon>`;
+  updatePipUI();
 }
 
 /**
@@ -1045,10 +1276,11 @@ function resetSession() {
 
   setDetectedPosture('Detecting...', 0);
   updateDebugLine('Detecting...', false, 0);
+  updatePipUI();
 }
 
 // ============================================================================
-// 7. Dynamic Class Probability Meters
+// 8. Dynamic Class Probability Meters
 // ============================================================================
 
 /**
@@ -1107,12 +1339,12 @@ function sanitizeId(str) {
 }
 
 // ============================================================================
-// 8. Simulation Mode (For Viva / Demo / Fallback Evaluation)
+// 9. Simulation Mode (For Viva / Demo / Fallback Evaluation)
 // ============================================================================
 
 /**
  * Runs simulated session demonstrating all features, dynamic classes,
- * Web Audio chime, and alert banner without physical webcam/model files.
+ * Web Audio chime, alert banner, and PiP without physical webcam/model files.
  */
 function startSimulationMode() {
   hideError();
@@ -1163,6 +1395,7 @@ function startSimulationMode() {
 
     setDetectedPosture(currentItem.name, 0.92);
     drawSimulatedCanvas(currentItem.name);
+    updatePipUI();
 
     if (seqTimer >= currentItem.duration) {
       seqTimer = 0;
@@ -1262,7 +1495,7 @@ function toggleSimulation() {
 }
 
 // ============================================================================
-// 9. Utilities, Helpers & Event Listeners
+// 10. Utilities, Helpers & Event Listeners
 // ============================================================================
 
 function formatTime(totalSeconds) {
@@ -1359,6 +1592,14 @@ function attachEventListeners() {
     }
   });
 
+  // Floating Mini Window (Document Picture-in-Picture)
+  if (DOM.btnFloatingPip) {
+    DOM.btnFloatingPip.addEventListener('click', togglePipWindow);
+  }
+
+  // Page visibility change handler for background loop switching
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+
   // Retry & simulation buttons
   DOM.retryInitBtn.addEventListener('click', startMonitoring);
   DOM.demoSimulateBtn.addEventListener('click', startSimulationMode);
@@ -1403,7 +1644,8 @@ function attachEventListeners() {
     startMonitoring();
   });
 
-  // Initial timeline and debug draw
+  // Initial checks and draws
+  checkPipSupport();
   drawTimelineCanvas();
   updateDebugLine('Detecting...', false, 0);
 }
@@ -1411,5 +1653,5 @@ function attachEventListeners() {
 // Initialize on DOM load
 window.addEventListener('DOMContentLoaded', () => {
   attachEventListeners();
-  console.log('[PostureGuard] Application ready. Waiting for user to start posture check.');
+  console.log('[PostureGuard] Application ready with background monitoring & Document PiP support.');
 });

@@ -1005,6 +1005,32 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   to { transform: scale(1.04); }
 }
 
+/* Background Monitoring Note */
+.bg-monitoring-note {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background: rgba(15, 26, 48, 0.75);
+  border-top: 1px solid var(--border-subtle);
+  padding: 0.6rem 1rem;
+  font-size: 0.8rem;
+  color: #38bdf8;
+  text-align: center;
+}
+
+.bg-monitoring-note svg {
+  flex-shrink: 0;
+  color: var(--teal-primary);
+}
+
+.pip-unsupported-note {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 0.2rem 0.5rem;
+}
+
 /* Video Footer Controls */
 .video-footer-controls {
   padding: 1rem 1.25rem;
