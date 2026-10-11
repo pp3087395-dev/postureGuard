@@ -1,0 +1,27 @@
+# Operating System files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE & Editor settings
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Node / Local Tooling (if used for serving)
+node_modules/
+package-lock.json
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Deployment & Temporary Artifacts
+.vercel
+dist/
+build/
+*.tmp
+*.log
+
+# Note: The /model folder with model.json, metadata.json, and weights.bin
+# should NOT be ignored so that Vercel can serve them statically.

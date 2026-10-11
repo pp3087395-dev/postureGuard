@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PostureGuard — Real-Time Ergonomic AI Coach | BUILD WITH ML</title>
+  <meta name="description" content="A real-time on-device posture coach for students powered by TensorFlow.js and Google Teachable Machine Pose. Built for BUILD WITH ML, University of Lucknow.">
+  <meta name="theme-color" content="#0a1120">
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+
+  <!-- TensorFlow.js and Teachable Machine Pose CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+</head>
+<body>
+
+  <!-- Background decorative glows -->
+  <div class="bg-glow bg-glow-1" aria-hidden="true"></div>
+  <div class="bg-glow bg-glow-2" aria-hidden="true"></div>
+
+  <!-- Navigation Bar -->
+  <header class="navbar" role="banner">
+    <div class="container nav-content">
+      <a href="#" class="brand-logo" aria-label="PostureGuard Home">
+        <div class="logo-icon-box">
+          <svg class="logo-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+            <circle cx="12" cy="7" r="4"></circle>
+            <path d="M18 8l2 2 4-4"></path>
+          </svg>
+        </div>
+        <div class="logo-text">
+          <span class="logo-name">Posture<span class="accent-text">Guard</span></span>
+          <span class="logo-tag">AI ERGONOMIC COACH</span>
+        </div>
+      </a>
+
+      <div class="nav-competition-badge">
+        <span class="pulse-dot"></span>
+        <span>BUILD WITH ML &bull; University of Lucknow</span>
+      </div>
+
+      <nav class="nav-links" aria-label="Primary Navigation">
+        <a href="#monitor-section" class="nav-link">Live Monitor</a>
+        <a href="#dashboard-section" class="nav-link">Dashboard</a>
+        <a href="#about-section" class="nav-link">Model & Tech</a>
+        <button id="navMuteBtn" class="btn-icon" aria-label="Toggle Sound Alerts" title="Toggle Sound">
+          <svg id="navSoundIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+          </svg>
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main-content">
+
+    <!-- Hero / Landing Section -->
+    <section class="hero-section" id="hero">
+      <div class="container hero-container">
+        <div class="hero-badge">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+            <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/>
+          </svg>
+          <span>Real-Time PoseNet Vision &bull; 100% Private On-Device</span>
+        </div>
+
+        <h1 class="hero-title">
+          Smart Spine Protection For <span class="gradient-text">Focused Students</span>
+        </h1>
+
+        <p class="hero-subtitle">
+          PostureGuard monitors your sitting alignment live using edge AI. Detect slouching, forward neck, and sideways tilt instantly — without your camera feed ever leaving your browser.
+        </p>
+
+        <div class="hero-actions">
+          <a href="#monitor-section" class="btn btn-primary btn-lg" id="startPostureCheckBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            Start Posture Check
+          </a>
+          <a href="#about-section" class="btn btn-secondary btn-lg">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="16" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+            How Model Works
+          </a>
+        </div>
+
+        <div class="privacy-banner">
+          <div class="privacy-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+          </div>
+          <div class="privacy-text">
+            <strong>Strict Privacy Guarantee:</strong> Your video stream never leaves your device. All pose estimation runs locally in your browser's WebGL engine via TensorFlow.js.
+          </div>
+        </div>
+
+        <!-- 3-Step How It Works -->
+        <div class="how-it-works-grid">
+          <div class="step-card">
+            <div class="step-number">01</div>
+            <div class="step-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                <circle cx="12" cy="13" r="4"></circle>
+              </svg>
+            </div>
+            <h3 class="step-title">Position Webcam</h3>
+            <p class="step-desc">Frame your upper body and head in standard desk lighting so your shoulders and ears are visible.</p>
+          </div>
+
+          <div class="step-card">
+            <div class="step-number">02</div>
+            <div class="step-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+              </svg>
+            </div>
+            <h3 class="step-title">Edge AI Classification</h3>
+            <p class="step-desc">TensorFlow.js extracts 17 skeletal landmarks and classifies posture into 4 calibrated ergonomic states.</p>
+          </div>
+
+          <div class="step-card">
+            <div class="step-number">03</div>
+            <div class="step-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+              </svg>
+            </div>
+            <h3 class="step-title">Smart Micro-Alerts</h3>
+            <p class="step-desc">If poor posture sustains over your custom delay (e.g. 25s), gentle audio and desktop alerts prompt alignment.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Live Monitor Section -->
+    <section class="monitor-section" id="monitor-section">
+      <div class="container">
+        
+        <!-- Section Header -->
+        <div class="section-header">
+          <div class="section-title-wrap">
+            <span class="section-eyebrow">REAL-TIME INFERENCE</span>
+            <h2 class="section-title">Live Posture Monitor</h2>
+          </div>
+          
+          <!-- Quick Status Indicators -->
+          <div class="monitor-header-stats">
+            <div class="header-stat-chip">
+              <span class="stat-chip-label">Session Status:</span>
+              <span id="sessionStatusPill" class="status-indicator status-idle">Ready</span>
+            </div>
+            <div class="header-stat-chip">
+              <span class="stat-chip-label">Active Time:</span>
+              <span id="headerTimer" class="stat-chip-val font-mono">00:00</span>
+            </div>
+            <div class="header-stat-chip">
+              <span class="stat-chip-label">Good Posture:</span>
+              <span id="headerGoodPercent" class="stat-chip-val font-mono">100%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Alert Banner (Appears dynamically upon sustained bad posture) -->
+        <div id="alertBanner" class="alert-banner" role="alert" aria-live="assertive" style="display: none;">
+          <div class="alert-banner-content">
+            <div class="alert-icon-pulse">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                <line x1="12" y1="9" x2="12" y2="13"></line>
+                <line x1="12" y1="17" x2="12.01" y2="17"></line>
+              </svg>
+            </div>
+            <div class="alert-banner-text">
+              <strong id="alertBannerTitle">Posture Alert!</strong>
+              <span id="alertBannerMessage">You have been slouching continuously for 25 seconds. Please sit back upright.</span>
+            </div>
+          </div>
+          <button id="dismissAlertBtn" class="btn-dismiss-alert" aria-label="Dismiss alert">Dismiss</button>
+        </div>
+
+        <!-- Main Monitor Grid -->
+        <div class="monitor-grid">
+          
+          <!-- Left Column: Video & Skeleton Canvas -->
+          <div class="video-card">
+            <div class="video-card-header">
+              <div class="video-title">
+                <span class="cam-indicator" id="camStatusDot"></span>
+                <span>Webcam & Pose Skeleton</span>
+              </div>
+              <div class="video-header-controls">
+                <span class="fps-tag font-mono" id="fpsDisplay">-- FPS</span>
+              </div>
+            </div>
+
+            <div class="canvas-viewport" id="canvasViewport">
+              <!-- Canvas rendered via tmPose / custom skeleton overlay -->
+              <canvas id="outputCanvas" width="400" height="400" aria-label="Webcam posture feed with PoseNet skeleton overlay"></canvas>
+              
+              <!-- Video Placeholder / Start State -->
+              <div id="videoPlaceholder" class="video-placeholder">
+                <div class="placeholder-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                    <circle cx="12" cy="13" r="4"></circle>
+                  </svg>
+                </div>
+                <h3>Camera Offline</h3>
+                <p>Click "Start Posture Check" to load model and initiate sitting posture tracking.</p>
+                <button id="startFromPlaceholderBtn" class="btn btn-primary">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                  </svg>
+                  Initialize Camera
+                </button>
+              </div>
+
+              <!-- Loading Spinner Overlay -->
+              <div id="loadingOverlay" class="canvas-overlay loading-overlay" style="display: none;" role="status">
+                <div class="spinner"></div>
+                <h4 id="loadingTitle">Loading PoseNet Model...</h4>
+                <p id="loadingSubtitle">Initializing TensorFlow.js WebGL backend & weights</p>
+              </div>
+
+              <!-- Error Overlay (Camera denied or Model missing) -->
+              <div id="errorOverlay" class="canvas-overlay error-overlay" style="display: none;" role="alert">
+                <div class="error-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="8" x2="12" y2="12"></line>
+                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                  </svg>
+                </div>
+                <h4 id="errorTitle">Model Initialization Required</h4>
+                <div id="errorMessage" class="error-body">
+                  Please place <code>model.json</code>, <code>metadata.json</code>, and <code>weights.bin</code> inside the <code>/model</code> directory.
+                </div>
+                <div class="error-actions">
+                  <button id="retryInitBtn" class="btn btn-secondary btn-sm">Retry Loading</button>
+                  <button id="demoSimulateBtn" class="btn btn-primary btn-sm" title="Test full dashboard, sound and alerts with synthetic pose data">
+                    Try Simulation Mode
+                  </button>
+                </div>
+              </div>
+
+              <!-- Live Badge Overlay on Video -->
+              <div class="canvas-overlay-badge" id="canvasOverlayBadge">
+                <span id="canvasPostureBadge" class="overlay-posture-badge badge-neutral">Standby</span>
+              </div>
+
+              <!-- Alert Timer Countdown Overlay on Video -->
+              <div id="badPostureTimerPill" class="bad-posture-timer-pill" style="display: none;">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <polyline points="12 6 12 12 16 14"></polyline>
+                </svg>
+                <span id="timerPillText">Warning in 25s</span>
+              </div>
+            </div>
+
+            <!-- Canvas Bottom Controls -->
+            <div class="video-footer-controls">
+              <div class="controls-group">
+                <button id="btnToggleMonitoring" class="btn btn-primary" aria-label="Start or pause posture monitoring">
+                  <svg id="btnPlayPauseIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                  </svg>
+                  <span id="btnPlayPauseText">Start Monitoring</span>
+                </button>
+                
+                <button id="btnStopSession" class="btn btn-secondary" disabled aria-label="Stop monitoring and display session summary">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="6" y="6" width="12" height="12"></rect>
+                  </svg>
+                  Stop & Summary
+                </button>
+
+                <button id="btnResetSession" class="btn btn-outline" aria-label="Reset session stats and timer">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 2v6h6"></path>
+                    <path d="M21 12A9 9 0 0 0 6 5.3L3 8"></path>
+                    <path d="M21 22v-6h-6"></path>
+                    <path d="M3 12a9 9 0 0 0 15 6.7l3-2.7"></path>
+                  </svg>
+                  Reset
+                </button>
+              </div>
+
+              <div class="mirror-toggle-group">
+                <label class="switch-label" for="mirrorToggle">
+                  <span>Mirror Feed</span>
+                  <input type="checkbox" id="mirrorToggle" checked>
+                  <span class="switch-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Column: Live Classification & Ergonomic Feedback -->
+          <div class="analysis-panel">
+            
+            <!-- Current Posture Status Card -->
+            <div class="card status-card">
+              <div class="card-header">
+                <span class="card-title-sm">Current Posture State</span>
+                <span class="confidence-tag font-mono" id="currentConfidence">Confidence: --%</span>
+              </div>
+              <div class="status-banner" id="statusBannerBox">
+                <div class="status-indicator-icon" id="statusIconBox">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                  </svg>
+                </div>
+                <div class="status-info">
+                  <h3 id="currentPostureLabel" class="current-posture-title">Detecting...</h3>
+                  <p id="currentPostureSub" class="current-posture-desc">Waiting for webcam stream to initialize</p>
+                </div>
+              </div>
+
+              <!-- Friendly Dynamic Tip Box -->
+              <div class="posture-tip-box" id="postureTipBox">
+                <div class="tip-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
+                  </svg>
+                </div>
+                <div class="tip-content">
+                  <strong class="tip-heading">Ergonomic Coach Tip:</strong>
+                  <p id="postureTipText" class="tip-body">Sit back comfortably, align your screen at eye level, and ensure your shoulders are relaxed.</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Class Probabilities Breakdown -->
+            <div class="card probabilities-card">
+              <div class="card-header">
+                <span class="card-title-sm">Smoothed Class Probabilities (10-frame Avg)</span>
+                <span class="threshold-badge">Threshold: &ge; 80%</span>
+              </div>
+              
+              <!-- Container dynamically filled by script.js based on model.getClassLabels() -->
+              <div id="classProbabilitiesContainer" class="probabilities-list" aria-label="Class probability bars">
+                <div class="prob-placeholder">Model not loaded. Class meters will render dynamically once model initializes.</div>
+              </div>
+            </div>
+
+            <!-- Alert & Audio Settings Card -->
+            <div class="card settings-card">
+              <div class="card-header">
+                <span class="card-title-sm">Smart Alert Configuration</span>
+              </div>
+              <div class="settings-grid">
+                
+                <!-- Delay Selector -->
+                <div class="setting-item">
+                  <label for="alertDelaySelect" class="setting-label">Bad Posture Alert Delay</label>
+                  <div class="select-wrapper">
+                    <select id="alertDelaySelect" class="form-select" aria-label="Select bad posture alert delay">
+                      <option value="10">10 Seconds (Strict Coach)</option>
+                      <option value="25" selected>25 Seconds (Standard / Recommended)</option>
+                      <option value="60">60 Seconds (Relaxed Interval)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <!-- Sound Controls -->
+                <div class="setting-item">
+                  <label class="setting-label">Sound Feedback</label>
+                  <div class="sound-controls-row">
+                    <button id="toggleAudioBtn" class="btn btn-outline btn-sm" aria-label="Mute or Unmute Audio Beep">
+                      <svg id="audioBtnIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                      </svg>
+                      <span id="audioBtnText">Sound: On</span>
+                    </button>
+                    <button id="testAudioBtn" class="btn btn-secondary btn-sm" aria-label="Test synthetic audio beep">
+                      Test Beep
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Desktop Notifications -->
+                <div class="setting-item">
+                  <label class="setting-label">Browser Notifications</label>
+                  <button id="requestNotificationBtn" class="btn btn-outline btn-sm" aria-label="Request browser desktop notification permission">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                      <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                    </svg>
+                    <span id="notificationBtnText">Enable Desktop Alerts</span>
+                  </button>
+                </div>
+
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+    </section>
+
+    <!-- Session Dashboard Section -->
+    <section class="dashboard-section" id="dashboard-section">
+      <div class="container">
+        
+        <div class="section-header">
+          <div class="section-title-wrap">
+            <span class="section-eyebrow">LIVE TELEMETRY</span>
+            <h2 class="section-title">Session Dashboard</h2>
+          </div>
+          <span class="dashboard-subtitle">Real-time posture analytics recorded continuously during your active session</span>
+        </div>
+
+        <!-- 4 Metric Cards Grid -->
+        <div class="metrics-grid">
+          
+          <!-- Metric 1: Total Duration -->
+          <div class="metric-card">
+            <div class="metric-icon-wrap icon-blue">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+            </div>
+            <div class="metric-content">
+              <span class="metric-label">Session Elapsed Time</span>
+              <div class="metric-value font-mono" id="statSessionTime">00:00</div>
+              <span class="metric-sub">Active camera monitoring</span>
+            </div>
+          </div>
+
+          <!-- Metric 2: Posture Score -->
+          <div class="metric-card">
+            <div class="metric-icon-wrap icon-green">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+              </svg>
+            </div>
+            <div class="metric-content">
+              <span class="metric-label">Good Posture Ratio</span>
+              <div class="metric-value font-mono" id="statGoodRatio">100%</div>
+              <span class="metric-sub" id="statGoodTime">00:00 upright posture</span>
+            </div>
+          </div>
+
+          <!-- Metric 3: Alerts Triggered -->
+          <div class="metric-card">
+            <div class="metric-icon-wrap icon-amber">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+              </svg>
+            </div>
+            <div class="metric-content">
+              <span class="metric-label">Alerts Triggered</span>
+              <div class="metric-value font-mono" id="statAlertCount">0</div>
+              <span class="metric-sub" id="statAlertsDesc">Threshold violations</span>
+            </div>
+          </div>
+
+          <!-- Metric 4: Dominant Concern -->
+          <div class="metric-card">
+            <div class="metric-icon-wrap icon-purple">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"></path>
+                <line x1="16" y1="8" x2="2" y2="22"></line>
+                <line x1="17.5" y1="15" x2="9" y2="15"></line>
+              </svg>
+            </div>
+            <div class="metric-content">
+              <span class="metric-label">Primary Correction</span>
+              <div class="metric-value" id="statPrimaryConcern">None (Optimal)</div>
+              <span class="metric-sub" id="statConcernDetail">Maintaining spine health</span>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Posture Breakdown & Timeline Visualizer -->
+        <div class="visualizer-grid">
+          
+          <!-- Posture Distribution Multi-Bar -->
+          <div class="card visualizer-card">
+            <div class="card-header">
+              <span class="card-title-sm">Posture Distribution (% of Active Session)</span>
+            </div>
+            <div class="distribution-bar-wrapper">
+              <div class="multi-segment-bar" id="distributionBar" role="progressbar" aria-label="Session posture distribution">
+                <div class="bar-segment seg-good" id="barSegGood" style="width: 100%;" title="Good Posture: 100%"></div>
+                <div class="bar-segment seg-slouch" id="barSegSlouch" style="width: 0%;" title="Slouching: 0%"></div>
+                <div class="bar-segment seg-neck" id="barSegNeck" style="width: 0%;" title="Neck Forward: 0%"></div>
+                <div class="bar-segment seg-lean" id="barSegLean" style="width: 0%;" title="Leaning Sideways: 0%"></div>
+              </div>
+              <div class="legend-row">
+                <div class="legend-item"><span class="legend-color seg-good"></span><span>Good: <b id="legGoodVal" class="font-mono">100%</b></span></div>
+                <div class="legend-item"><span class="legend-color seg-slouch"></span><span>Slouching: <b id="legSlouchVal" class="font-mono">0%</b></span></div>
+                <div class="legend-item"><span class="legend-color seg-neck"></span><span>Neck Forward: <b id="legNeckVal" class="font-mono">0%</b></span></div>
+                <div class="legend-item"><span class="legend-color seg-lean"></span><span>Leaning: <b id="legLeanVal" class="font-mono">0%</b></span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Real-Time Rolling Timeline Strip (Plain Canvas - No Chart Library) -->
+          <div class="card visualizer-card">
+            <div class="card-header">
+              <span class="card-title-sm">60-Second Real-Time History Strip</span>
+              <span class="timeline-legend-tag">Rolling 1s Samples</span>
+            </div>
+            <div class="timeline-canvas-wrap">
+              <canvas id="timelineCanvas" height="52" aria-label="Rolling 60-second posture history canvas"></canvas>
+            </div>
+            <div class="timeline-axis-labels">
+              <span>60s ago</span>
+              <span>30s ago</span>
+              <span>Live Now &bull;</span>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+    </section>
+
+    <!-- About & Model Info Section (Required for Viva & Evaluation) -->
+    <section class="about-section" id="about-section">
+      <div class="container">
+        
+        <div class="section-header text-center">
+          <span class="section-eyebrow">RESEARCH & EVALUATION</span>
+          <h2 class="section-title">About PostureGuard & Model Training</h2>
+          <p class="section-subtitle-center">
+            Submitted for <strong>BUILD WITH ML — University of Lucknow</strong>. Engineering details, training protocol, and ethical AI considerations.
+          </p>
+        </div>
+
+        <div class="about-grid">
+          
+          <!-- Column 1: Problem & Approach -->
+          <div class="about-card">
+            <div class="about-badge">01. CLINICAL PROBLEM</div>
+            <h3>The Student Spine Epidemic</h3>
+            <p>
+              Students and developers sit for 8–12 hours daily, often unconsciously adopting forward head posture ("tech neck"), lumbar slouching, and lateral pelvic tilts. Chronic postural degradation causes spinal disc compression, tension headaches, and permanent thoracic kyphosis.
+            </p>
+            <p>
+              Traditional posture correctors require wearable hardware or cloud streaming cameras that compromise student privacy. PostureGuard demonstrates a <strong>zero-cloud, browser-native alternative</strong> that runs locally on consumer laptops.
+            </p>
+          </div>
+
+          <!-- Column 2: ML Pipeline & Teachable Machine -->
+          <div class="about-card">
+            <div class="about-badge">02. MODEL ARCHITECTURE</div>
+            <h3>PoseNet & Teachable Machine</h3>
+            <p>
+              PostureGuard uses Google's PoseNet backbone ported through <strong>Google Teachable Machine Pose</strong> with TensorFlow.js. PoseNet identifies 17 2D keypoints (nose, eyes, ears, shoulders, elbows, wrists, hips).
+            </p>
+            <ul class="feature-bullets">
+              <li><strong>Model Classes:</strong> "Good Posture", "Slouching", "Neck Forward", "Leaning Sideways".</li>
+              <li><strong>Self-Collected Dataset:</strong> Hundreds of webcam frames captured across varied seated setups and shirt contrasts.</li>
+              <li><strong>Moving-Average Filter:</strong> Predictions smoothed across 10 rolling frames to suppress high-frequency video jitter.</li>
+              <li><strong>Threshold Gate:</strong> Strictly requires &ge; 80% confidence before triggering state changes.</li>
+            </ul>
+          </div>
+
+          <!-- Column 3: Known Limitations & Ethical Use -->
+          <div class="about-card">
+            <div class="about-badge">03. LIMITATIONS & ETHICS</div>
+            <h3>Responsible AI Statement</h3>
+            <p>
+              In compliance with ML evaluation standards, we explicitly acknowledge our prototype's physical and algorithmic boundaries:
+            </p>
+            <ul class="feature-bullets">
+              <li><strong>Lighting & Contrast:</strong> Poor backlighting or loose clothing may degrade shoulder keypoint estimation.</li>
+              <li><strong>Camera Angle:</strong> Calibrated for front/slight angle webcam placement (eye-to-sternum height). Extreme side profiles are out-of-distribution.</li>
+              <li><strong>Upper Body Framing:</strong> Requires head, neck, and both shoulders in view.</li>
+              <li><strong>Demographic Representation:</strong> Trained on limited student cohorts; diversity expansion is planned.</li>
+              <li><strong>Non-Medical Tool:</strong> PostureGuard is an ergonomic habit reminder, not an orthopedic diagnostic medical device.</li>
+            </ul>
+          </div>
+
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Session Summary Modal Dialog -->
+  <dialog id="summaryModal" class="summary-modal" aria-labelledby="modalScoreHeading" aria-modal="true">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-badge">SESSION REPORT</div>
+        <button id="modalCloseBtn" class="btn-icon" aria-label="Close summary modal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+      <div class="modal-body">
+        
+        <!-- Big Score Ring -->
+        <div class="score-summary-wrap">
+          <div class="score-circle-container">
+            <svg class="score-circle-svg" viewBox="0 0 120 120" aria-hidden="true">
+              <circle class="score-circle-bg" cx="60" cy="60" r="50"></circle>
+              <circle id="modalScoreCircle" class="score-circle-fill" cx="60" cy="60" r="50"></circle>
+            </svg>
+            <div class="score-circle-content">
+              <span id="modalScoreValue" class="score-number font-mono">--</span>
+              <span class="score-denom">/ 100</span>
+            </div>
+          </div>
+          <div class="score-text-meta">
+            <h3 id="modalScoreHeading" class="score-heading">Ergonomic Score</h3>
+            <span id="modalScoreGrade" class="badge-grade">Calculating...</span>
+            <p id="modalScoreSummaryText" class="score-summary-p">
+              Session completed. Review your alignment data and targeted adjustments below.
+            </p>
+          </div>
+        </div>
+
+        <!-- Session Key Stats Grid -->
+        <div class="modal-stats-grid">
+          <div class="modal-stat-box">
+            <span class="modal-stat-label">Total Duration</span>
+            <span id="modalStatDuration" class="modal-stat-val font-mono">00:00</span>
+          </div>
+          <div class="modal-stat-box">
+            <span class="modal-stat-label">Good Posture Time</span>
+            <span id="modalStatGoodTime" class="modal-stat-val font-mono">00:00</span>
+          </div>
+          <div class="modal-stat-box">
+            <span class="modal-stat-label">Alerts Triggered</span>
+            <span id="modalStatAlerts" class="modal-stat-val font-mono">0</span>
+          </div>
+          <div class="modal-stat-box">
+            <span class="modal-stat-label">Alert Threshold</span>
+            <span id="modalStatThreshold" class="modal-stat-val font-mono">25s</span>
+          </div>
+        </div>
+
+        <!-- Posture Time Breakdown -->
+        <div class="modal-breakdown">
+          <h4 class="modal-subheading">Posture Breakdown</h4>
+          <div class="breakdown-list" id="modalBreakdownList">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+
+        <!-- Tailored Ergonomic Advice -->
+        <div class="modal-advice-box">
+          <div class="advice-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path>
+            </svg>
+          </div>
+          <div class="advice-content">
+            <strong class="advice-title">Personalized Coach Recommendation</strong>
+            <p id="modalAdviceText" class="advice-body">
+              Maintain this great posture! Take a 20-second break every 30 minutes to stand and hydrate.
+            </p>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="modal-footer">
+        <button id="modalNewSessionBtn" class="btn btn-primary">Start New Session</button>
+        <button id="modalDismissBtn" class="btn btn-secondary">Done</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Footer -->
+  <footer class="app-footer">
+    <div class="container footer-content">
+      <div class="footer-left">
+        <div class="footer-brand">Posture<span class="accent-text">Guard</span></div>
+        <p class="footer-sub">
+          Developed for <strong>BUILD WITH ML &bull; University of Lucknow</strong>. Real-time edge machine learning for student well-being.
+        </p>
+      </div>
+      <div class="footer-right">
+        <div class="footer-links">
+          <span>Powered by:</span>
+          <a href="https://teachablemachine.withgoogle.com/" target="_blank" rel="noopener">Google Teachable Machine</a>
+          <span class="sep">&bull;</span>
+          <a href="https://www.tensorflow.org/js" target="_blank" rel="noopener">TensorFlow.js</a>
+        </div>
+        <div class="footer-disclaimer">
+          Client-side execution only. No video or biometric telemetry is stored or transmitted.
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Application Script -->
+  <script src="script.js"></script>
+</body>
+</html>
