@@ -8,12 +8,21 @@
  * ============================================================================
  */
 
+/**
+ * Universal Posture Evaluator Helper
+ * Matches any class label containing "good" (case-insensitive, trimmed).
+ */
+function isGoodPosture(label) {
+  if (!label || typeof label !== 'string') return false;
+  return label.trim().toLowerCase().includes('good');
+}
+
 // --- Global Application State ---
 const state = {
   // Model & Vision
   model: null,
   webcam: null,
-  classLabels: [],          // Dynamically loaded from model
+  classLabels: [],          // Dynamically loaded from metadata.json
   isModelLoaded: false,
   isMonitoring: false,
   isPaused: false,
@@ -39,6 +48,7 @@ const state = {
   alertDelaySeconds: 25,
   badPostureStartTime: null,
   hasAlertedThisEpisode: false,
+  isAlertBannerShowing: false,
   isMuted: false,
   audioContext: null,
   notificationsEnabled: false,
@@ -54,55 +64,84 @@ const state = {
   currentFps: 0
 };
 
-// Ergonomic coaching suggestions by detected posture
-const ERGONOMIC_TIPS = {
-  'Good Posture': {
-    title: 'Optimal Alignment',
-    tip: 'Great job! Your cervical spine is neutral and shoulders are relaxed. Maintain steady breathing.',
-    className: 'is-good',
-    badgeClass: 'badge-good'
-  },
-  'Slouching': {
-    title: 'Lumbar Slouch Detected',
-    tip: 'Roll your shoulders backwards, engage your core muscles, and sit firmly against your backrest.',
+/**
+ * Dynamic metadata and coaching suggestions by detected posture
+ * Uses isGoodPosture() rather than rigid strings.
+ */
+function getPostureMeta(label) {
+  if (isGoodPosture(label)) {
+    return {
+      title: 'Optimal Alignment',
+      tip: 'Great job! Your cervical spine is neutral and shoulders are relaxed. Maintain steady breathing.',
+      className: 'is-good',
+      badgeClass: 'badge-good'
+    };
+  }
+
+  const lower = (label || '').toLowerCase();
+  if (lower.includes('slouch')) {
+    return {
+      title: 'Lumbar Slouch Detected',
+      tip: 'Roll your shoulders backwards, engage your core muscles, and sit firmly against your backrest.',
+      className: 'is-slouch',
+      badgeClass: 'badge-slouch'
+    };
+  }
+  if (lower.includes('neck')) {
+    return {
+      title: 'Forward Head Strain ("Tech Neck")',
+      tip: 'Pull your chin gently backwards (cervical retraction), align ears over shoulders, and lift chest.',
+      className: 'is-neck',
+      badgeClass: 'badge-neck'
+    };
+  }
+  if (lower.includes('lean')) {
+    return {
+      title: 'Lateral Spine Asymmetry',
+      tip: 'Distribute your body weight evenly across both sit-bones and bring your monitor directly ahead.',
+      className: 'is-lean',
+      badgeClass: 'badge-lean'
+    };
+  }
+  if (lower.includes('no person')) {
+    return {
+      title: 'No Subject In View',
+      tip: 'Please position yourself in front of the webcam to begin posture tracking.',
+      className: '',
+      badgeClass: 'badge-neutral'
+    };
+  }
+  if (lower.includes('detect')) {
+    return {
+      title: 'Calibrating Pose...',
+      tip: 'Ensure your upper torso, shoulders, and head are clearly visible within the camera frame.',
+      className: '',
+      badgeClass: 'badge-neutral'
+    };
+  }
+
+  // Any other customized bad posture label
+  return {
+    title: `${label} Detected`,
+    tip: 'Adjust your seating posture and maintain a neutral upright spine.',
     className: 'is-slouch',
     badgeClass: 'badge-slouch'
-  },
-  'Neck Forward': {
-    title: 'Forward Head Strain ("Tech Neck")',
-    tip: 'Pull your chin gently backwards (cervical retraction), align ears over shoulders, and lift chest.',
-    className: 'is-neck',
-    badgeClass: 'badge-neck'
-  },
-  'Leaning Sideways': {
-    title: 'Lateral Spine Asymmetry',
-    tip: 'Distribute your body weight evenly across both sit-bones and bring your monitor directly ahead.',
-    className: 'is-lean',
-    badgeClass: 'badge-lean'
-  },
-  'Detecting...': {
-    title: 'Calibrating Pose...',
-    tip: 'Ensure your upper torso, shoulders, and head are clearly visible within the camera frame.',
-    className: '',
-    badgeClass: 'badge-neutral'
-  },
-  'No Person Detected': {
-    title: 'No Subject In View',
-    tip: 'Please position yourself in front of the webcam to begin posture tracking.',
-    className: '',
-    badgeClass: 'badge-neutral'
-  }
-};
+  };
+}
 
-// Posture Color Palette for Canvas & Timeline
-const POSTURE_COLORS = {
-  'Good Posture': '#10b981',       // Emerald Green
-  'Slouching': '#f59e0b',          // Amber
-  'Neck Forward': '#f43f5e',        // Rose
-  'Leaning Sideways': '#a855f7',    // Violet
-  'Detecting...': '#64748b',       // Slate
-  'No Person Detected': '#475569'  // Dark Slate
-};
+/**
+ * Dynamic color provider for badges, meters, and canvas timeline
+ */
+function getPostureColor(label) {
+  if (isGoodPosture(label)) return '#10b981'; // Emerald Green
+  const lower = (label || '').toLowerCase();
+  if (lower.includes('slouch')) return '#f59e0b'; // Amber
+  if (lower.includes('neck')) return '#f43f5e';   // Rose
+  if (lower.includes('lean')) return '#a855f7';   // Violet
+  if (lower.includes('no person')) return '#475569';
+  if (lower.includes('detect')) return '#64748b'; // Slate
+  return '#f59e0b'; // Default bad posture color
+}
 
 // --- DOM Element References ---
 const DOM = {
@@ -164,6 +203,7 @@ const DOM = {
   headerGoodPercent: document.getElementById('headerGoodPercent'),
   camStatusDot: document.getElementById('camStatusDot'),
   fpsDisplay: document.getElementById('fpsDisplay'),
+  debugLine: document.getElementById('debugLine'),
 
   // Dashboard Metrics
   statSessionTime: document.getElementById('statSessionTime'),
@@ -174,14 +214,7 @@ const DOM = {
   statConcernDetail: document.getElementById('statConcernDetail'),
 
   // Distribution Segments & Legends
-  barSegGood: document.getElementById('barSegGood'),
-  barSegSlouch: document.getElementById('barSegSlouch'),
-  barSegNeck: document.getElementById('barSegNeck'),
-  barSegLean: document.getElementById('barSegLean'),
-  legGoodVal: document.getElementById('legGoodVal'),
-  legSlouchVal: document.getElementById('legSlouchVal'),
-  legNeckVal: document.getElementById('legNeckVal'),
-  legLeanVal: document.getElementById('legLeanVal'),
+  distributionBar: document.getElementById('distributionBar'),
 
   // Summary Modal Dialog
   summaryModal: document.getElementById('summaryModal'),
@@ -205,8 +238,9 @@ const DOM = {
 // ============================================================================
 
 /**
- * Loads the Teachable Machine Pose model from relative paths:
+ * Loads the Teachable Machine Pose model dynamically from:
  * ./model/model.json & ./model/metadata.json
+ * Class names are extracted dynamically from metadata.json without hardcoding.
  */
 async function loadModel() {
   const modelURL = './model/model.json';
@@ -215,21 +249,38 @@ async function loadModel() {
   showLoading('Loading Teachable Machine Pose Model...', 'Downloading model topology and PoseNet weights');
 
   try {
-    // tmPose.load reads model.json and metadata.json
-    state.model = await tmPose.load(modelURL, metadataURL);
-    
-    // Read labels dynamically from metadata (DO NOT hardcode class counts)
-    state.classLabels = state.model.getClassLabels();
-    console.log('[PostureGuard] Model successfully loaded. Classes detected:', state.classLabels);
+    // 1. Read class names dynamically from metadata.json
+    try {
+      const metaResp = await fetch(metadataURL);
+      if (metaResp.ok) {
+        const metaJson = await metaResp.json();
+        if (Array.isArray(metaJson.labels) && metaJson.labels.length > 0) {
+          state.classLabels = metaJson.labels;
+          console.log('[PostureGuard] Dynamically loaded labels from metadata.json:', state.classLabels);
+        }
+      }
+    } catch (metaErr) {
+      console.warn('[PostureGuard] Direct metadata.json fetch fallback:', metaErr);
+    }
 
-    // Initialize telemetry tracking slots for all classes
+    // 2. Load model using tmPose
+    state.model = await tmPose.load(modelURL, metadataURL);
+
+    // If metadata.json fetch was not populated, read from model.getClassLabels()
+    if (!state.classLabels || state.classLabels.length === 0) {
+      state.classLabels = state.model.getClassLabels();
+    }
+    console.log('[PostureGuard] Model successfully loaded. Dynamic classes:', state.classLabels);
+
+    // Initialize telemetry tracking slots for all dynamically discovered classes
     state.classLabels.forEach(label => {
       state.postureDurations[label] = 0;
       state.smoothedProbabilities[label] = 0;
     });
 
-    // Render dynamic UI meters for every class in the model
+    // Render dynamic UI meters and distribution bar for every class in the model
     renderClassMetersUI();
+    renderDistributionUI();
 
     state.isModelLoaded = true;
     hideLoading();
@@ -307,7 +358,6 @@ async function predictLoop() {
     // 4. Draw Skeleton & Landmarks if a person is in frame
     if (pose) {
       const minPartConfidence = 0.5;
-      // tmPose built-in drawing helpers
       if (typeof tmPose.drawKeypoints === 'function') {
         tmPose.drawKeypoints(pose.keypoints, minPartConfidence, DOM.ctx);
       }
@@ -385,17 +435,12 @@ function processPredictions(predictions, hasPose) {
 
 /**
  * Updates UI status badges, tips, and manages bad posture alert countdown
+ * Evaluates posture using isGoodPosture().
  */
 function setDetectedPosture(postureName, probability) {
   state.currentActivePosture = postureName;
 
-  // Retrieve posture metadata or fallback
-  const meta = ERGONOMIC_TIPS[postureName] || {
-    title: postureName,
-    tip: 'Observe proper ergonomic alignment and maintain a balanced sitting position.',
-    className: '',
-    badgeClass: 'badge-neutral'
-  };
+  const meta = getPostureMeta(postureName);
 
   // Update Status Banner in Analysis Card
   DOM.currentPostureLabel.textContent = postureName;
@@ -420,20 +465,40 @@ function setDetectedPosture(postureName, probability) {
 }
 
 // ============================================================================
-// 3. Smart Alert Engine (Audio Beep, Banner, Desktop Notification)
+// 3. Smart Alert Engine & Debug Telemetry
 // ============================================================================
 
 /**
- * Monitors continuous bad posture duration and triggers alerts if delay threshold exceeded
+ * Updates the small debug telemetry line:
+ * label, isGood (true/false), badTimerSeconds
+ */
+function updateDebugLine(label, isGood, badTimerSeconds) {
+  const text = `label: "${label}" | isGood: ${isGood} | badTimerSeconds: ${badTimerSeconds}s`;
+  if (DOM.debugLine) {
+    DOM.debugLine.textContent = text;
+  }
+}
+
+/**
+ * Monitors continuous bad posture duration and triggers alerts.
+ * Rules:
+ * 1. Uses isGoodPosture(label) for all good/bad decisions.
+ * 2. Starts the bad-posture timer ONLY when label is not good AND not "Detecting...".
+ * 3. When posture is good, immediately resets timer to 0, hides alert banner, and removes "Alert Active" badge.
+ * 4. The "Alert Active" badge is visible ONLY while the alert banner is actually showing.
  */
 function handlePostureAlertTimer(posture) {
-  const isBadPosture = (
-    posture !== 'Good Posture' &&
-    posture !== 'Detecting...' &&
-    posture !== 'No Person Detected'
+  const isGood = isGoodPosture(posture);
+  const isDetecting = (
+    posture === 'Detecting...' ||
+    posture === 'No Person Detected' ||
+    posture.toLowerCase().includes('detect')
   );
+  const isBad = !isGood && !isDetecting;
 
-  if (isBadPosture) {
+  let badTimerSeconds = 0;
+
+  if (isBad) {
     // Start continuous timer if not already ticking
     if (!state.badPostureStartTime) {
       state.badPostureStartTime = Date.now();
@@ -441,32 +506,38 @@ function handlePostureAlertTimer(posture) {
     }
 
     const elapsedMs = Date.now() - state.badPostureStartTime;
-    const elapsedSec = Math.floor(elapsedMs / 1000);
+    badTimerSeconds = Math.floor(elapsedMs / 1000);
     const thresholdSec = state.alertDelaySeconds;
-    const remainingSec = Math.max(0, thresholdSec - elapsedSec);
 
-    // Show countdown pill on canvas
-    DOM.badPostureTimerPill.style.display = 'flex';
-    DOM.timerPillText.textContent = remainingSec > 0 
-      ? `Alert in ${remainingSec}s (${posture})`
-      : `Alert Active (${posture})`;
-
-    // Check if threshold exceeded
-    if (elapsedSec >= thresholdSec && !state.hasAlertedThisEpisode) {
-      triggerPostureAlert(posture, elapsedSec);
+    // Trigger alert if threshold exceeded
+    if (badTimerSeconds >= thresholdSec && !state.hasAlertedThisEpisode) {
+      triggerPostureAlert(posture, badTimerSeconds);
       state.hasAlertedThisEpisode = true;
     }
+
+    // The "Alert Active" badge must be visible ONLY while the alert banner is actually showing
+    if (state.isAlertBannerShowing) {
+      DOM.badPostureTimerPill.style.display = 'flex';
+      DOM.timerPillText.textContent = `Alert Active (${posture})`;
+    } else {
+      DOM.badPostureTimerPill.style.display = 'none';
+    }
   } else {
-    // Good posture restored! Reset timer and dismiss alerts
+    // Posture is good or detecting:
+    // Immediately reset the timer to 0, hide alert banner and remove the "Alert Active" badge
     state.badPostureStartTime = null;
     state.hasAlertedThisEpisode = false;
-    DOM.badPostureTimerPill.style.display = 'none';
+    badTimerSeconds = 0;
     hideAlertBanner();
+    DOM.badPostureTimerPill.style.display = 'none';
   }
+
+  // Update small debug line
+  updateDebugLine(posture, isGood, badTimerSeconds);
 }
 
 /**
- * Fires the synthesized Web Audio chime, alert banner, and desktop notification
+ * Fires synthesized Web Audio chime, alert banner, and desktop notification
  */
 function triggerPostureAlert(badPostureName, secondsElapsed) {
   state.totalAlertsTriggered++;
@@ -552,13 +623,16 @@ function playAlertBeep() {
 }
 
 function showAlertBanner(title, message) {
+  state.isAlertBannerShowing = true;
   DOM.alertBannerTitle.textContent = title;
   DOM.alertBannerMessage.textContent = message;
   DOM.alertBanner.style.display = 'flex';
 }
 
 function hideAlertBanner() {
+  state.isAlertBannerShowing = false;
   DOM.alertBanner.style.display = 'none';
+  DOM.badPostureTimerPill.style.display = 'none';
 }
 
 // ============================================================================
@@ -566,7 +640,7 @@ function hideAlertBanner() {
 // ============================================================================
 
 /**
- * Starts the interval timer that updates active session duration,
+ * Starts interval timer that updates active session duration,
  * posture distribution, and rolling timeline canvas every second.
  */
 function startSessionTracking() {
@@ -585,8 +659,8 @@ function startSessionTracking() {
       state.postureDurations[current] = 1;
     }
 
-    // Add current color to rolling 60-second timeline history
-    const postureColor = POSTURE_COLORS[current] || POSTURE_COLORS['Detecting...'];
+    // Add current color to rolling 60-second timeline history using isGoodPosture
+    const postureColor = getPostureColor(current);
     state.timelineHistory.push(postureColor);
     if (state.timelineHistory.length > 60) {
       state.timelineHistory.shift();
@@ -601,6 +675,7 @@ function startSessionTracking() {
 
 /**
  * Updates all live dashboard stats, score ratios, and multi-segment bar
+ * Evaluates good posture time dynamically using isGoodPosture().
  */
 function updateDashboardUI() {
   const total = state.activeSessionDuration;
@@ -610,26 +685,27 @@ function updateDashboardUI() {
   DOM.headerTimer.textContent = timeFormatted;
   DOM.statSessionTime.textContent = timeFormatted;
 
-  // Good Posture calculations
-  const goodTime = state.postureDurations['Good Posture'] || 0;
-  // Calculate ratio against total posture seconds (or default 100% at start)
+  // Good Posture calculations using isGoodPosture()
+  let goodTime = 0;
+  let worstClass = 'None (Optimal)';
+  let maxBadTime = 0;
+
+  Object.entries(state.postureDurations).forEach(([label, sec]) => {
+    if (isGoodPosture(label)) {
+      goodTime += sec;
+    } else if (label !== 'Detecting...' && label !== 'No Person Detected') {
+      if (sec > maxBadTime) {
+        maxBadTime = sec;
+        worstClass = label;
+      }
+    }
+  });
+
   const ratio = total > 0 ? Math.round((goodTime / total) * 100) : 100;
 
   DOM.headerGoodPercent.textContent = `${ratio}%`;
   DOM.statGoodRatio.textContent = `${ratio}%`;
   DOM.statGoodTime.textContent = `${formatTime(goodTime)} upright posture`;
-
-  // Determine dominant concern among bad postures
-  let worstClass = 'None (Optimal)';
-  let maxBadTime = 0;
-
-  ['Slouching', 'Neck Forward', 'Leaning Sideways'].forEach(label => {
-    const time = state.postureDurations[label] || 0;
-    if (time > maxBadTime) {
-      maxBadTime = time;
-      worstClass = label;
-    }
-  });
 
   if (maxBadTime > 0) {
     DOM.statPrimaryConcern.textContent = worstClass;
@@ -639,27 +715,63 @@ function updateDashboardUI() {
     DOM.statConcernDetail.textContent = 'Maintaining healthy spine alignment';
   }
 
-  // Update Multi-Segment Distribution Bar
-  if (total > 0) {
-    const goodPct = ((goodTime / total) * 100).toFixed(1);
-    const slouchPct = (((state.postureDurations['Slouching'] || 0) / total) * 100).toFixed(1);
-    const neckPct = (((state.postureDurations['Neck Forward'] || 0) / total) * 100).toFixed(1);
-    const leanPct = (((state.postureDurations['Leaning Sideways'] || 0) / total) * 100).toFixed(1);
-
-    DOM.barSegGood.style.width = `${goodPct}%`;
-    DOM.barSegSlouch.style.width = `${slouchPct}%`;
-    DOM.barSegNeck.style.width = `${neckPct}%`;
-    DOM.barSegLean.style.width = `${leanPct}%`;
-
-    DOM.legGoodVal.textContent = `${goodPct}%`;
-    DOM.legSlouchVal.textContent = `${slouchPct}%`;
-    DOM.legNeckVal.textContent = `${neckPct}%`;
-    DOM.legLeanVal.textContent = `${leanPct}%`;
-  }
+  // Update dynamic multi-segment distribution bar and legends
+  updateDistributionUI(total);
 }
 
 /**
- * Draws the rolling 60-second posture history strip on a plain canvas
+ * Dynamically renders the distribution bar segments and legends
+ * based on the exact classes loaded from metadata.json
+ */
+function renderDistributionUI() {
+  const barContainer = DOM.distributionBar;
+  const legendContainer = document.querySelector('.legend-row');
+
+  if (barContainer && state.classLabels.length > 0) {
+    barContainer.innerHTML = '';
+    state.classLabels.forEach(label => {
+      const seg = document.createElement('div');
+      seg.className = 'bar-segment';
+      seg.id = `bar-seg-${sanitizeId(label)}`;
+      seg.style.backgroundColor = getPostureColor(label);
+      seg.style.width = isGoodPosture(label) ? '100%' : '0%';
+      barContainer.appendChild(seg);
+    });
+  }
+
+  if (legendContainer && state.classLabels.length > 0) {
+    legendContainer.innerHTML = '';
+    state.classLabels.forEach(label => {
+      const item = document.createElement('div');
+      item.className = 'legend-item';
+      const color = getPostureColor(label);
+      item.innerHTML = `
+        <span class="legend-color" style="background-color: ${color}"></span>
+        <span>${label}: <b id="leg-val-${sanitizeId(label)}" class="font-mono">${isGoodPosture(label) ? '100%' : '0%'}</b></span>
+      `;
+      legendContainer.appendChild(item);
+    });
+  }
+}
+
+function updateDistributionUI(total) {
+  if (total <= 0) return;
+
+  state.classLabels.forEach(label => {
+    const sec = state.postureDurations[label] || 0;
+    const pct = ((sec / total) * 100).toFixed(1);
+    const safeId = sanitizeId(label);
+
+    const seg = document.getElementById(`bar-seg-${safeId}`);
+    if (seg) seg.style.width = `${pct}%`;
+
+    const legVal = document.getElementById(`leg-val-${safeId}`);
+    if (legVal) legVal.textContent = `${pct}%`;
+  });
+}
+
+/**
+ * Draws rolling 60-second posture history strip on a plain canvas
  * (No external chart library used)
  */
 function drawTimelineCanvas() {
@@ -689,7 +801,6 @@ function drawTimelineCanvas() {
   history.forEach((color, idx) => {
     const x = (startIndex + idx) * slotWidth;
     ctx.fillStyle = color;
-    // Rounded bar slice
     ctx.fillRect(x + 0.5, 4, Math.max(1, slotWidth - 1), height - 8);
   });
 }
@@ -701,13 +812,17 @@ function drawTimelineCanvas() {
 /**
  * Stops active monitoring, computes final Posture Score (out of 100),
  * and presents the Session Summary modal dialog.
+ * Evaluates good posture duration using isGoodPosture().
  */
 function showSessionSummary() {
-  // Pause monitoring
   pauseMonitoring();
 
   const total = state.activeSessionDuration;
-  const goodTime = state.postureDurations['Good Posture'] || 0;
+  let goodTime = 0;
+  Object.entries(state.postureDurations).forEach(([label, sec]) => {
+    if (isGoodPosture(label)) goodTime += sec;
+  });
+
   const score = total > 0 ? Math.round((goodTime / total) * 100) : 100;
 
   // Populate Score
@@ -743,14 +858,12 @@ function showSessionSummary() {
   DOM.modalScoreGrade.style.color = gradeColor;
   DOM.modalScoreCircle.style.stroke = gradeColor;
 
-  // Build Breakdown List
+  // Build Breakdown List dynamically for all classes
   DOM.modalBreakdownList.innerHTML = '';
-  const sortedClasses = Object.keys(state.postureDurations);
-
-  sortedClasses.forEach(label => {
+  Object.keys(state.postureDurations).forEach(label => {
     const sec = state.postureDurations[label] || 0;
     const pct = total > 0 ? ((sec / total) * 100).toFixed(1) : '0.0';
-    const color = POSTURE_COLORS[label] || '#94a3b8';
+    const color = getPostureColor(label);
 
     const row = document.createElement('div');
     row.className = 'modal-breakdown-row';
@@ -776,27 +889,37 @@ function showSessionSummary() {
 }
 
 /**
- * Generates tailored ergonomic feedback based on the session's data
+ * Generates tailored ergonomic feedback based on session's data
  */
 function generatePersonalizedAdvice(score) {
-  const neckTime = state.postureDurations['Neck Forward'] || 0;
-  const slouchTime = state.postureDurations['Slouching'] || 0;
-  const leanTime = state.postureDurations['Leaning Sideways'] || 0;
-
   if (score >= 85) {
     return 'Outstanding spinal hygiene! You kept neutral cervical alignment throughout your study session. Continue scheduling a 20-second break every 30 minutes to stand and hydrate.';
   }
 
-  if (neckTime >= slouchTime && neckTime >= leanTime) {
-    return 'Cervical Neck Strain Detected: Your primary fatigue pattern is forward head tilt ("Tech Neck"). We recommend elevating your laptop/monitor so the top third of your display is level with your eyes, reducing the effective weight on your neck muscles.';
-  }
+  // Find dominant bad posture dynamically using isGoodPosture
+  let maxBadClass = null;
+  let maxBadSec = 0;
+  Object.entries(state.postureDurations).forEach(([label, sec]) => {
+    if (!isGoodPosture(label) && label !== 'Detecting...' && label !== 'No Person Detected') {
+      if (sec > maxBadSec) {
+        maxBadSec = sec;
+        maxBadClass = label;
+      }
+    }
+  });
 
-  if (slouchTime >= neckTime && slouchTime >= leanTime) {
-    return 'Lumbar Slouching Detected: You tend to round your lower spine during prolonged sitting. Try placing a small cushion or lumbar roll behind your lower back, and adjust your seat depth so your feet rest flat on the floor.';
-  }
-
-  if (leanTime > 0) {
-    return 'Lateral Tilt Detected: You frequently lean toward one side of your chair. Check that your keyboard and mouse are directly centered in front of you, and avoid resting on one elbow.';
+  if (maxBadClass) {
+    const lower = maxBadClass.toLowerCase();
+    if (lower.includes('neck')) {
+      return `Cervical Neck Strain Detected (${maxBadClass}): Your primary fatigue pattern is forward head tilt. We recommend elevating your laptop/monitor so the top third of your display is level with your eyes.`;
+    }
+    if (lower.includes('slouch')) {
+      return `Lumbar Slouching Detected (${maxBadClass}): You tend to round your lower spine during prolonged sitting. Try placing a small cushion or lumbar roll behind your lower back, and adjust your seat depth so your feet rest flat.`;
+    }
+    if (lower.includes('lean')) {
+      return `Lateral Tilt Detected (${maxBadClass}): You frequently lean toward one side. Ensure your keyboard and mouse are directly centered in front of you, and avoid resting on one elbow.`;
+    }
+    return `Postural Strain Detected (${maxBadClass}): Regular micro-breaks will help reset postural fatigue. Take 30 seconds every 25 minutes to roll your shoulders backwards and sit upright.`;
   }
 
   return 'Regular micro-breaks will help reset postural fatigue. Take 30 seconds every 25 minutes to roll your shoulders backwards and perform chin tucks.';
@@ -875,7 +998,7 @@ function toggleMonitoring() {
 }
 
 /**
- * Resets the entire session data and counters
+ * Resets entire session data and counters
  */
 function resetSession() {
   pauseMonitoring();
@@ -908,15 +1031,7 @@ function resetSession() {
   DOM.statPrimaryConcern.textContent = 'None (Optimal)';
   DOM.statConcernDetail.textContent = 'Maintaining spine health';
 
-  DOM.barSegGood.style.width = '100%';
-  DOM.barSegSlouch.style.width = '0%';
-  DOM.barSegNeck.style.width = '0%';
-  DOM.barSegLean.style.width = '0%';
-
-  DOM.legGoodVal.textContent = '100%';
-  DOM.legSlouchVal.textContent = '0%';
-  DOM.legNeckVal.textContent = '0%';
-  DOM.legLeanVal.textContent = '0%';
+  renderDistributionUI();
 
   DOM.sessionStatusPill.textContent = 'Ready';
   DOM.sessionStatusPill.className = 'status-indicator status-idle';
@@ -929,6 +1044,7 @@ function resetSession() {
   DOM.badPostureTimerPill.style.display = 'none';
 
   setDetectedPosture('Detecting...', 0);
+  updateDebugLine('Detecting...', false, 0);
 }
 
 // ============================================================================
@@ -936,7 +1052,7 @@ function resetSession() {
 // ============================================================================
 
 /**
- * Builds the UI meters for every class loaded dynamically from the model
+ * Builds UI meters dynamically for every class discovered in metadata.json
  */
 function renderClassMetersUI() {
   DOM.classProbabilitiesContainer.innerHTML = '';
@@ -946,13 +1062,17 @@ function renderClassMetersUI() {
     item.className = 'prob-item';
     item.id = `prob-item-${sanitizeId(label)}`;
 
-    // Determine bar fill color class
     let fillClass = 'fill-default';
     let dotColor = '#38bdf8';
-    if (label.includes('Good')) { fillClass = 'fill-good'; dotColor = '#10b981'; }
-    else if (label.includes('Slouch')) { fillClass = 'fill-slouch'; dotColor = '#f59e0b'; }
-    else if (label.includes('Neck')) { fillClass = 'fill-neck'; dotColor = '#f43f5e'; }
-    else if (label.includes('Lean')) { fillClass = 'fill-lean'; dotColor = '#a855f7'; }
+    if (isGoodPosture(label)) {
+      fillClass = 'fill-good';
+      dotColor = '#10b981';
+    } else {
+      const lower = label.toLowerCase();
+      if (lower.includes('slouch')) { fillClass = 'fill-slouch'; dotColor = '#f59e0b'; }
+      else if (lower.includes('neck')) { fillClass = 'fill-neck'; dotColor = '#f43f5e'; }
+      else if (lower.includes('lean')) { fillClass = 'fill-lean'; dotColor = '#a855f7'; }
+    }
 
     item.innerHTML = `
       <div class="prob-meta">
@@ -991,8 +1111,8 @@ function sanitizeId(str) {
 // ============================================================================
 
 /**
- * Runs a simulated session that demonstrates all UI features, canvas drawing,
- * audio chime, and alerts even when model files haven't been copied yet.
+ * Runs simulated session demonstrating all features, dynamic classes,
+ * Web Audio chime, and alert banner without physical webcam/model files.
  */
 function startSimulationMode() {
   hideError();
@@ -1002,12 +1122,13 @@ function startSimulationMode() {
   state.isPaused = false;
 
   // Synthesize classes
-  state.classLabels = ['Good Posture', 'Slouching', 'Neck Forward', 'Leaning Sideways'];
+  state.classLabels = ['Good posture', 'Slouching'];
   state.classLabels.forEach(label => {
     state.postureDurations[label] = 0;
     state.smoothedProbabilities[label] = 0;
   });
   renderClassMetersUI();
+  renderDistributionUI();
 
   DOM.sessionStatusPill.textContent = 'Simulated Demo';
   DOM.sessionStatusPill.className = 'status-indicator status-running';
@@ -1017,12 +1138,11 @@ function startSimulationMode() {
 
   startSessionTracking();
 
-  // Synthetic animation loop
+  // Synthetic animation sequence
   const postures = [
-    { name: 'Good Posture', duration: 8 },
-    { name: 'Neck Forward', duration: 12 },
+    { name: 'Good posture', duration: 8 },
     { name: 'Slouching', duration: 10 },
-    { name: 'Good Posture', duration: 10 }
+    { name: 'Good posture', duration: 10 }
   ];
 
   let currentSeqIdx = 0;
@@ -1034,16 +1154,14 @@ function startSimulationMode() {
     seqTimer++;
     const currentItem = postures[currentSeqIdx];
 
-    // Simulate class probabilities
+    // Simulate probabilities
     state.classLabels.forEach(label => {
       const isTarget = (label === currentItem.name);
-      const prob = isTarget ? 0.92 : 0.02 + Math.random() * 0.05;
+      const prob = isTarget ? 0.92 : 0.08;
       updateSingleMeter(label, prob);
     });
 
     setDetectedPosture(currentItem.name, 0.92);
-
-    // Draw synthetic animated posture stick-figure on canvas
     drawSimulatedCanvas(currentItem.name);
 
     if (seqTimer >= currentItem.duration) {
@@ -1074,7 +1192,7 @@ function drawSimulatedCanvas(postureName) {
   // Draw simulated stick figure skeleton
   const cx = canvas.width / 2;
   const cy = canvas.height / 2;
-  const color = POSTURE_COLORS[postureName] || '#10b981';
+  const color = getPostureColor(postureName);
 
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
@@ -1085,13 +1203,14 @@ function drawSimulatedCanvas(postureName) {
   let headY = cy - 70;
   let spineTiltX = 0;
 
-  if (postureName === 'Neck Forward') {
+  const lower = postureName.toLowerCase();
+  if (lower.includes('neck')) {
     headX = cx + 45;
     headY = cy - 45;
-  } else if (postureName === 'Slouching') {
+  } else if (lower.includes('slouch')) {
     headY = cy - 35;
     spineTiltX = -25;
-  } else if (postureName === 'Leaning Sideways') {
+  } else if (lower.includes('lean')) {
     headX = cx - 40;
     spineTiltX = -35;
   }
@@ -1233,7 +1352,6 @@ function attachEventListeners() {
   DOM.btnResetSession.addEventListener('click', resetSession);
   DOM.startFromPlaceholderBtn.addEventListener('click', startMonitoring);
   DOM.startPostureCheckBtn.addEventListener('click', () => {
-    // Scroll and start
     const section = document.getElementById('monitor-section');
     section.scrollIntoView({ behavior: 'smooth' });
     if (!state.isMonitoring) {
@@ -1249,7 +1367,6 @@ function attachEventListeners() {
   DOM.mirrorToggle.addEventListener('change', (e) => {
     state.mirrorFeed = e.target.checked;
     if (state.webcam) {
-      // Re-setup webcam with updated flip property
       startWebcam();
     }
   });
@@ -1286,8 +1403,9 @@ function attachEventListeners() {
     startMonitoring();
   });
 
-  // Initial timeline draw
+  // Initial timeline and debug draw
   drawTimelineCanvas();
+  updateDebugLine('Detecting...', false, 0);
 }
 
 // Initialize on DOM load

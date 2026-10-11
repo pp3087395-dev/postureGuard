@@ -746,6 +746,23 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   box-shadow: 0 0 10px #10b981;
 }
 
+.video-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.debug-tag {
+  font-size: 0.725rem;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
 .fps-tag {
   font-size: 0.75rem;
   color: var(--text-muted);
