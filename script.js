@@ -52,7 +52,9 @@ const state = {
   // Smart Alert Engine
   alertDelaySeconds: 25,
   badPostureStartTime: null,
-  hasAlertedThisEpisode: false,
+  isAlarmActive: false,
+  alarmIntervalId: null,
+  activeNotification: null,
   isAlertBannerShowing: false,
   isMuted: false,
   audioContext: null,
@@ -536,22 +538,24 @@ function setDetectedPosture(postureName, probability) {
 
 /**
  * Updates small debug telemetry line:
- * label, isGood (true/false), badTimerSeconds
+ * label, isGood (true/false), badTimerSeconds, alarmActive (true/false), secondsUntilAlarm
  */
 function updateDebugLine(label, isGood, badTimerSeconds) {
-  const text = `label: "${label}" | isGood: ${isGood} | badTimerSeconds: ${badTimerSeconds}s`;
+  const alarmActive = Boolean(state.isAlarmActive);
+  const secondsUntilAlarm = alarmActive ? 0 : Math.max(0, state.alertDelaySeconds - (badTimerSeconds || 0));
+  const text = `label: "${label}" | isGood: ${isGood} | badTimerSeconds: ${badTimerSeconds}s | alarmActive: ${alarmActive} | secondsUntilAlarm: ${secondsUntilAlarm}s`;
   if (DOM.debugLine) {
     DOM.debugLine.textContent = text;
   }
 }
 
 /**
- * Monitors continuous bad posture duration and triggers alerts.
+ * Monitors continuous bad posture duration and triggers continuous alarm.
  * Rules:
  * 1. Uses isGoodPosture(label) for all good/bad decisions.
  * 2. Starts the bad-posture timer ONLY when label is not good AND not "Detecting...".
- * 3. When posture is good, immediately resets timer to 0, hides alert banner, and removes "Alert Active" badge.
- * 4. The "Alert Active" badge is visible ONLY while the alert banner is actually showing.
+ * 3. When timer reaches delay, starts a continuous alarm (beeps every ~1s, banner, Notification).
+ * 4. When posture becomes good, immediately resets timer to 0, stops any alarm, and hides banner.
  */
 function handlePostureAlertTimer(posture) {
   const isGood = isGoodPosture(posture);
@@ -568,17 +572,15 @@ function handlePostureAlertTimer(posture) {
     // Start continuous timer if not already ticking
     if (!state.badPostureStartTime) {
       state.badPostureStartTime = Date.now();
-      state.hasAlertedThisEpisode = false;
     }
 
     const elapsedMs = Date.now() - state.badPostureStartTime;
     badTimerSeconds = Math.floor(elapsedMs / 1000);
     const thresholdSec = state.alertDelaySeconds;
 
-    // Trigger alert if threshold exceeded
-    if (badTimerSeconds >= thresholdSec && !state.hasAlertedThisEpisode) {
-      triggerPostureAlert(posture, badTimerSeconds);
-      state.hasAlertedThisEpisode = true;
+    // Trigger continuous alarm if threshold reached and alarm not already running
+    if (badTimerSeconds >= thresholdSec && !state.isAlarmActive) {
+      startContinuousAlarm(posture, badTimerSeconds);
     }
 
     // The "Alert Active" badge must be visible ONLY while the alert banner is actually showing
@@ -590,12 +592,11 @@ function handlePostureAlertTimer(posture) {
     }
   } else {
     // Posture is good or detecting:
-    // Immediately reset the timer to 0, hide alert banner and remove the "Alert Active" badge
+    // Reset timer to 0, stop any active alarm, hide alert banner and remove badge
     state.badPostureStartTime = null;
-    state.hasAlertedThisEpisode = false;
     badTimerSeconds = 0;
+    stopAlarm();
     hideAlertBanner();
-    DOM.badPostureTimerPill.style.display = 'none';
   }
 
   // Update small debug line
@@ -603,34 +604,128 @@ function handlePostureAlertTimer(posture) {
 }
 
 /**
- * Fires synthesized Web Audio chime, alert banner, and desktop Notification.
- * When tab is hidden or notification permission is granted, sends a persistent
- * browser notification with requireInteraction: true.
+ * Starts continuous alarm: repeats Web Audio beep every ~1 second (via setInterval),
+ * displays prominent alert banner with Dismiss button, and sends desktop Notification.
+ * Counts as one alert in the session stats (once per alarm, not per beep).
  */
-function triggerPostureAlert(badPostureName, secondsElapsed) {
+function startContinuousAlarm(badPostureName, secondsElapsed) {
+  // Ensure only ONE alarm interval exists at a time
+  stopAlarm();
+
+  state.isAlarmActive = true;
   state.totalAlertsTriggered++;
-  DOM.statAlertCount.textContent = state.totalAlertsTriggered;
+  if (DOM.statAlertCount) {
+    DOM.statAlertCount.textContent = state.totalAlertsTriggered;
+  }
 
-  // 1. Play synthetic Web Audio alert chime (no external audio file required)
+  // 1. Play first beep immediately, then repeat every ~1 second via setInterval
   playAlertBeep();
+  state.alarmIntervalId = setInterval(() => {
+    playAlertBeep();
+  }, 1000);
 
-  // 2. Display on-screen alert banner
+  // 2. Display on-screen alert banner with Dismiss button
   showAlertBanner(
     `Sustained ${badPostureName} Detected!`,
     `You have maintained ${badPostureName.toLowerCase()} continuously for ${secondsElapsed} seconds. Please adjust your back and neck alignment.`
   );
 
-  // 3. Send browser Notification (title "PostureGuard", body with the tip for that posture, requireInteraction: true)
+  // 3. Send browser Notification with requireInteraction: true
+  sendPostureNotification(badPostureName, secondsElapsed);
+}
+
+// Backwards-compatible alias for any external or internal caller
+function triggerPostureAlert(badPostureName, secondsElapsed) {
+  startContinuousAlarm(badPostureName, secondsElapsed);
+}
+
+/**
+ * Clears the continuous alarm interval and cleans up active notification.
+ * Ensures only ONE alarm interval exists at a time and prevents overlap.
+ */
+function stopAlarm() {
+  if (state.alarmIntervalId) {
+    clearInterval(state.alarmIntervalId);
+    state.alarmIntervalId = null;
+  }
+  state.isAlarmActive = false;
+
+  if (state.activeNotification) {
+    try {
+      const notif = state.activeNotification;
+      state.activeNotification = null;
+      notif.onclick = null;
+      notif.onclose = null;
+      notif.close();
+    } catch (e) {
+      console.warn('[PostureGuard] Error closing notification:', e);
+    }
+  }
+}
+
+/**
+ * Handles alert dismissal when user clicks "Dismiss" (or closes/clicks Notification).
+ * Stops beeping, hides banner, and if posture is still bad, resets bad-posture
+ * timer to 0 to start counting from zero again for another full delay cycle.
+ */
+function dismissAlarm() {
+  stopAlarm();
+  hideAlertBanner();
+
+  const currentPosture = state.currentActivePosture;
+  const isGood = isGoodPosture(currentPosture);
+  const isDetecting = (
+    currentPosture === 'Detecting...' ||
+    currentPosture === 'No Person Detected' ||
+    currentPosture.toLowerCase().includes('detect')
+  );
+  const isStillBad = !isGood && !isDetecting;
+
+  if (isStillBad) {
+    // Reset timer to 0 and start counting again from zero
+    state.badPostureStartTime = Date.now();
+    updateDebugLine(currentPosture, false, 0);
+  } else {
+    state.badPostureStartTime = null;
+    updateDebugLine(currentPosture, isGood, 0);
+  }
+
+  updatePipUI();
+}
+
+/**
+ * Sends desktop Notification with requireInteraction: true.
+ * Clicking or closing the notification dismisses the alarm.
+ */
+function sendPostureNotification(badPostureName, secondsElapsed) {
   if ('Notification' in window && Notification.permission === 'granted') {
     const meta = getPostureMeta(badPostureName);
     const tipText = meta.tip || 'Sit upright and align your spine.';
     try {
-      new Notification('PostureGuard', {
+      if (state.activeNotification) {
+        state.activeNotification.close();
+        state.activeNotification = null;
+      }
+
+      const notif = new Notification('PostureGuard', {
         body: `${badPostureName} detected (${secondsElapsed}s)! ${tipText}`,
         icon: 'favicon.ico',
         requireInteraction: true, // Stays until user dismisses it
         tag: 'postureguard-alert'
       });
+
+      notif.onclick = () => {
+        dismissAlarm();
+        try { window.focus(); } catch (e) {}
+      };
+
+      notif.onclose = () => {
+        if (state.isAlarmActive) {
+          dismissAlarm();
+        }
+      };
+
+      state.activeNotification = notif;
     } catch (notifErr) {
       console.warn('[PostureGuard] Notification error:', notifErr);
     }
@@ -638,7 +733,26 @@ function triggerPostureAlert(badPostureName, secondsElapsed) {
 }
 
 /**
+ * Resumes AudioContext on user interaction so audio works even in background tabs
+ */
+function resumeAudioContext() {
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    if (!state.audioContext) {
+      state.audioContext = new AudioContextClass();
+    }
+    if (state.audioContext.state === 'suspended') {
+      state.audioContext.resume();
+    }
+  } catch (audioErr) {
+    console.warn('[PostureGuard] AudioContext resume error:', audioErr);
+  }
+}
+
+/**
  * Synthesizes a clean two-tone chime using Web Audio API (Web Audio oscillator)
+ * Silenced if state.isMuted is true.
  */
 function playAlertBeep() {
   if (state.isMuted) return;
@@ -695,15 +809,15 @@ function playAlertBeep() {
 
 function showAlertBanner(title, message) {
   state.isAlertBannerShowing = true;
-  DOM.alertBannerTitle.textContent = title;
-  DOM.alertBannerMessage.textContent = message;
-  DOM.alertBanner.style.display = 'flex';
+  if (DOM.alertBannerTitle) DOM.alertBannerTitle.textContent = title;
+  if (DOM.alertBannerMessage) DOM.alertBannerMessage.textContent = message;
+  if (DOM.alertBanner) DOM.alertBanner.style.display = 'flex';
 }
 
 function hideAlertBanner() {
   state.isAlertBannerShowing = false;
-  DOM.alertBanner.style.display = 'none';
-  DOM.badPostureTimerPill.style.display = 'none';
+  if (DOM.alertBanner) DOM.alertBanner.style.display = 'none';
+  if (DOM.badPostureTimerPill) DOM.badPostureTimerPill.style.display = 'none';
 }
 
 // ============================================================================
@@ -1148,6 +1262,9 @@ function generatePersonalizedAdvice(score) {
  * Starts or resumes posture monitoring session
  */
 async function startMonitoring() {
+  // Resume AudioContext on Start button click so beeps work even when the tab is hidden
+  resumeAudioContext();
+
   // Ask for Notification permission when user clicks Start
   if ('Notification' in window && Notification.permission === 'default') {
     try {
@@ -1204,6 +1321,8 @@ async function startMonitoring() {
 function pauseMonitoring() {
   state.isPaused = true;
   stopInferenceLoop();
+  stopAlarm();
+  hideAlertBanner();
 
   DOM.sessionStatusPill.textContent = 'Paused';
   DOM.sessionStatusPill.className = 'status-indicator status-paused';
@@ -1232,6 +1351,7 @@ function toggleMonitoring() {
  * Resets entire session data and counters
  */
 function resetSession() {
+  stopAlarm();
   pauseMonitoring();
 
   // Reset counters
@@ -1239,7 +1359,7 @@ function resetSession() {
   state.totalAlertsTriggered = 0;
   state.timelineHistory = [];
   state.badPostureStartTime = null;
-  state.hasAlertedThisEpisode = false;
+  state.isAlarmActive = false;
 
   state.classLabels.forEach(label => {
     state.postureDurations[label] = 0;
@@ -1347,6 +1467,7 @@ function sanitizeId(str) {
  * Web Audio chime, alert banner, and PiP without physical webcam/model files.
  */
 function startSimulationMode() {
+  resumeAudioContext();
   hideError();
   DOM.videoPlaceholder.style.display = 'none';
   state.isSimulatedMode = true;
@@ -1585,6 +1706,7 @@ function attachEventListeners() {
   DOM.btnResetSession.addEventListener('click', resetSession);
   DOM.startFromPlaceholderBtn.addEventListener('click', startMonitoring);
   DOM.startPostureCheckBtn.addEventListener('click', () => {
+    resumeAudioContext();
     const section = document.getElementById('monitor-section');
     section.scrollIntoView({ behavior: 'smooth' });
     if (!state.isMonitoring) {
@@ -1629,7 +1751,7 @@ function attachEventListeners() {
   DOM.requestNotificationBtn.addEventListener('click', requestNotificationPermission);
 
   // Alert banner dismiss
-  DOM.dismissAlertBtn.addEventListener('click', hideAlertBanner);
+  DOM.dismissAlertBtn.addEventListener('click', dismissAlarm);
 
   // Modal dialog controls
   DOM.modalCloseBtn.addEventListener('click', () => {
