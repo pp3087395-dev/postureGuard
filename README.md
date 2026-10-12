@@ -25,7 +25,8 @@ Existing commercial solutions rely on wearable sensors (costly and inconvenient)
 **PostureGuard** is a browser-native, privacy-preserving sitting-posture coach built specifically for students. It runs on consumer laptops using standard webcams and executes **on-device computer vision** via TensorFlow.js and Google Teachable Machine Pose.
 
 ### Key Highlights:
-* **Zero Video Transmission:** Raw video frames are processed directly inside your browser's WebGL execution context. No frames, telemetry, or biometric identifiers ever leave the client.
+* **Zero Video Transmission & 100% Offline Privacy:** Raw video frames are processed directly inside your browser's WebGL execution context. All runtime libraries (`@tensorflow/tfjs` 1.7.4 and `@teachablemachine/pose` 0.8.6) are completely self-hosted in `/lib/`—no CDN tracking, no external server calls, and zero video, telemetry, or biometric data leaves your device.
+* **Continuous Background Monitoring:** Uses a dedicated Web Worker ticker, Document Picture-in-Picture floating widget, Screen Wake Lock, and background-resilient alerts to maintain continuous posture analysis even when working across other tabs and desktop applications.
 * **Instant Feedback & Smart Micro-Alerts:** Synthesizes gentle audio chimes (via Web Audio API) and system notifications only when bad posture persists for user-configured intervals (10s / 25s / 60s).
 * **Live Telemetry & Scorecard:** Live posture score (out of 100), real-time rolling timeline strip, and session summaries with tailored ergonomic adjustments.
 
@@ -67,10 +68,14 @@ Existing commercial solutions rely on wearable sensors (costly and inconvenient)
 * **Styling:** Modern Vanilla CSS3 (custom CSS design tokens, glassmorphism, responsive grid & flexbox, accessible focus states).
 * **Scripting:** Pure Vanilla ECMAScript (ES6+), modular functional architecture.
 * **Machine Learning Runtime:**
-  - `@tensorflow/tfjs` (v1.3.1 CDN)
-  - `@teachablemachine/pose` (v0.8 CDN)
+  - `@tensorflow/tfjs` (v1.7.4, self-hosted locally in `/lib/tf.min.js`)
+  - `@teachablemachine/pose` (v0.8.6, self-hosted locally in `/lib/teachablemachine-pose.min.js`)
+* **Background Architecture:**
+  - Dedicated Web Worker Ticker (immune to browser tab timer throttling)
+  - Document Picture-in-Picture API (floating always-on-top interactive widget)
+  - Screen Wake Lock API (`navigator.wakeLock`)
 * **Audio Engine:** HTML5 Web Audio API (`AudioContext`, `OscillatorNode`, `GainNode`).
-* **Deployment:** Zero-build static web application (direct deployment on Vercel or GitHub Pages).
+* **Deployment:** Zero-build static web application (direct deployment on Vercel, Netlify, or GitHub Pages).
 
 ---
 

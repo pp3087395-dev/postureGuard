@@ -17,8 +17,11 @@ function isGoodPosture(label) {
   return label.trim().toLowerCase().includes('good');
 }
 
-// Background tab inference interval (~4.5 FPS)
-const BG_INTERVAL_MS = 220;
+// Background Web Worker tick interval (~3.8 to 4 FPS, ~260 ms)
+const BG_INTERVAL_MS = 260;
+
+// Foreground inference cap interval (~10 FPS, ~100 ms)
+const FG_INTERVAL_MS = 100;
 
 // --- Global Application State ---
 const state = {
@@ -30,11 +33,19 @@ const state = {
   isMonitoring: false,
   isPaused: false,
   animationFrameId: null,
-  backgroundIntervalId: null,
+  backgroundIntervalId: null, // Legacy / fallback interval
   isInBackground: false,
   mirrorFeed: true,
+  isInferenceBusy: false,
+  consecutiveSlowInferences: 0,
+  fallbackAttempted: false,
 
-  // Prediction Smoothing Buffer (10-frame sliding window)
+  // Background Web Worker Ticker & Anti-Throttling
+  tickerWorker: null,
+  wakeLock: null,
+  silentAudioNode: null,
+
+  // Dynamic Prediction Smoothing Buffer (10 in FG, 5 in BG = ~1.0-1.3s)
   smoothingWindowSize: 10,
   predictionHistory: [],    // Array of { [className]: probability }
   smoothedProbabilities: {},
@@ -54,6 +65,7 @@ const state = {
   badPostureStartTime: null,
   isAlarmActive: false,
   alarmIntervalId: null,
+  lastAlarmBeepTime: 0,
   activeNotification: null,
   isAlertBannerShowing: false,
   isMuted: false,
@@ -68,8 +80,10 @@ const state = {
   simulatedInterval: null,
   simulatedStep: 0,
 
-  // FPS Counter
+  // FPS Counter & Background Telemetry
   lastFrameTime: performance.now(),
+  lastForegroundFrameTime: 0,
+  lastTelemetryLogTime: performance.now(),
   frameCount: 0,
   currentFps: 0
 };
@@ -313,19 +327,126 @@ async function loadModel() {
 }
 
 /**
- * Initializes the user's webcam using tmPose.Webcam
+ * Screen Wake Lock Management
+ * Prevents screen sleep and browser tab background throttling during sessions
+ */
+async function requestWakeLock() {
+  if ('wakeLock' in navigator) {
+    try {
+      if (!state.wakeLock) {
+        state.wakeLock = await navigator.wakeLock.request('screen');
+        state.wakeLock.addEventListener('release', () => {
+          state.wakeLock = null;
+          console.log('[PostureGuard] Screen Wake Lock released');
+        });
+        console.log('[PostureGuard] Screen Wake Lock successfully acquired');
+      }
+    } catch (err) {
+      console.warn('[PostureGuard] Screen Wake Lock warning:', err);
+    }
+  }
+}
+
+function releaseWakeLock() {
+  if (state.wakeLock) {
+    state.wakeLock.release().catch(() => {});
+    state.wakeLock = null;
+  }
+}
+
+/**
+ * Web Audio Silent Loop Keep-Alive
+ * Audio-producing tabs are granted high background priority by modern browsers
+ */
+function startSilentAudio() {
+  try {
+    resumeAudioContext();
+    if (state.audioContext && !state.silentAudioNode) {
+      const buffer = state.audioContext.createBuffer(1, state.audioContext.sampleRate, state.audioContext.sampleRate);
+      const source = state.audioContext.createBufferSource();
+      source.buffer = buffer;
+      source.loop = true;
+      source.connect(state.audioContext.destination);
+      source.start();
+      state.silentAudioNode = source;
+      console.log('[PostureGuard] Silent audio keep-alive track active');
+    }
+  } catch (err) {
+    console.warn('[PostureGuard] Silent audio keep-alive error:', err);
+  }
+}
+
+function stopSilentAudio() {
+  if (state.silentAudioNode) {
+    try {
+      state.silentAudioNode.stop();
+      state.silentAudioNode.disconnect();
+    } catch (e) {}
+    state.silentAudioNode = null;
+  }
+}
+
+/**
+ * Initializes the Web Worker background ticker
+ */
+function initTickerWorker() {
+  if (state.tickerWorker) return;
+  try {
+    state.tickerWorker = new Worker('worker-ticker.js');
+  } catch (workerErr) {
+    console.warn('[PostureGuard] Direct Worker creation failed, using Blob fallback:', workerErr);
+    const workerBlobCode = `
+      let timerId = null;
+      self.onmessage = function(e) {
+        const d = e.data || {};
+        const action = typeof d === 'string' ? d : d.action;
+        if (action === 'start') {
+          const interval = d.interval || 260;
+          if (timerId) clearInterval(timerId);
+          timerId = setInterval(() => self.postMessage({ type: 'tick', timestamp: Date.now() }), interval);
+        } else if (action === 'stop') {
+          if (timerId) { clearInterval(timerId); timerId = null; }
+        }
+      };
+    `;
+    const blob = new Blob([workerBlobCode], { type: 'application/javascript' });
+    state.tickerWorker = new Worker(URL.createObjectURL(blob));
+  }
+
+  state.tickerWorker.onmessage = async (e) => {
+    if (e.data && e.data.type === 'tick') {
+      if (state.isMonitoring && !state.isPaused && document.hidden) {
+        if (!state.isInferenceBusy) {
+          state.isInferenceBusy = true;
+          try {
+            await stepInference(true);
+          } finally {
+            state.isInferenceBusy = false;
+          }
+        }
+      }
+    }
+  };
+}
+
+/**
+ * Initializes the user's webcam using tmPose.Webcam with 320x240 resolution
  */
 async function startWebcam() {
   showLoading('Starting Camera...', 'Requesting webcam permissions');
 
-  const width = 400;
-  const height = 400;
+  const width = 320;
+  const height = 240;
   const flip = state.mirrorFeed; // Mirror horizontally for intuitive user preview
 
   try {
     state.webcam = new tmPose.Webcam(width, height, flip);
     await state.webcam.setup(); // Request camera access
     await state.webcam.play();
+
+    // Match canvas dimensions to webcam resolution for 1:1 crisp display
+    DOM.canvas.width = width;
+    DOM.canvas.height = height;
 
     DOM.videoPlaceholder.style.display = 'none';
     DOM.camStatusDot.classList.add('active');
@@ -350,21 +471,39 @@ async function startWebcam() {
  * Executes a single inference step.
  * When isBackground is false: draws frame and skeleton to canvas.
  * When isBackground is true (tab hidden): skips canvas drawing to save GPU/battery
- * but continues PoseNet estimation, smoothing, bad posture alerts & PiP updates.
+ * but continues PoseNet estimation, tensor cleanup, smoothing, bad posture alerts & PiP updates.
  */
 async function stepInference(isBackground = false) {
   if (!state.isMonitoring || state.isPaused || !state.model || !state.webcam) return;
+
+  const startTime = performance.now();
 
   try {
     // 1. Update webcam frame
     state.webcam.update();
 
-    // 2. Pose estimation & classification
-    const { pose, posenetOutput } = await state.model.estimatePose(state.webcam.canvas);
-    const predictions = await state.model.predict(posenetOutput);
+    // 2. Pose estimation & classification with guaranteed intermediate tensor disposal
+    let pose = null;
+    let posenetOutput = null;
+    let predictions = null;
 
-    // 3. Render to canvas only when visible
-    if (!isBackground) {
+    try {
+      const estimation = await state.model.estimatePose(state.webcam.canvas);
+      pose = estimation.pose;
+      posenetOutput = estimation.posenetOutput;
+
+      if (posenetOutput) {
+        predictions = await state.model.predict(posenetOutput);
+      }
+    } finally {
+      // Memory Leak Prevention: dispose intermediate posenetOutput Tensor
+      if (posenetOutput && typeof posenetOutput.dispose === 'function') {
+        posenetOutput.dispose();
+      }
+    }
+
+    // 3. Render to canvas only when visible (skip completely in background)
+    if (!isBackground && !document.hidden) {
       DOM.ctx.clearRect(0, 0, DOM.canvas.width, DOM.canvas.height);
       DOM.ctx.drawImage(state.webcam.canvas, 0, 0, DOM.canvas.width, DOM.canvas.height);
 
@@ -379,16 +518,53 @@ async function stepInference(isBackground = false) {
       }
     }
 
-    // 4. Process predictions with 10-frame smoothing buffer
-    processPredictions(predictions, Boolean(pose));
+    // 4. Process predictions with mode-adaptive smoothing window
+    processPredictions(predictions, Boolean(pose), isBackground);
 
     // 5. Update Floating Mini Window (Document PiP) if open
-    if (state.pipWindow) {
+    if (state.pipWindow && !state.pipWindow.closed) {
       updatePipUI();
     }
 
-    // 6. Update FPS indicator
-    updateFPS();
+    // 6. Resilient background alert beeper: repeat beep every 1s while alarm is active
+    if (state.isAlarmActive) {
+      const now = Date.now();
+      if (now - (state.lastAlarmBeepTime || 0) >= 1000) {
+        playAlertBeep();
+        state.lastAlarmBeepTime = now;
+      }
+    }
+
+    // 7. Backend performance check: detect GPU / WebGL throttling in hidden tabs
+    const stepDuration = performance.now() - startTime;
+    if (isBackground && stepDuration > 280 && !state.fallbackAttempted) {
+      state.consecutiveSlowInferences = (state.consecutiveSlowInferences || 0) + 1;
+      if (state.consecutiveSlowInferences >= 5) {
+        console.warn(`[PostureGuard] WebGL inference slowed down in background (${stepDuration.toFixed(1)}ms). Switching to CPU backend...`);
+        try {
+          if (window.tf && typeof tf.setBackend === 'function') {
+            await tf.setBackend('cpu');
+            state.fallbackAttempted = true;
+            console.log('[PostureGuard] Successfully switched to CPU backend for background stability.');
+          }
+        } catch (backendErr) {
+          console.warn('[PostureGuard] Backend fallback failed:', backendErr);
+        }
+      }
+    } else if (!isBackground && state.fallbackAttempted) {
+      // Restore WebGL when tab returns to foreground
+      try {
+        if (window.tf && typeof tf.setBackend === 'function') {
+          await tf.setBackend('webgl');
+          state.fallbackAttempted = false;
+          state.consecutiveSlowInferences = 0;
+          console.log('[PostureGuard] Restored WebGL backend for foreground session.');
+        }
+      } catch (e) {}
+    }
+
+    // 8. Update FPS indicator & periodic telemetry
+    updateFPS(isBackground);
   } catch (err) {
     console.error('[PostureGuard] Inference step error:', err);
   }
@@ -396,44 +572,62 @@ async function stepInference(isBackground = false) {
 
 /**
  * Manages dual-mode execution loop:
- * - When document.hidden is false: uses requestAnimationFrame for full 30 FPS visual smoothness.
- * - When document.hidden is true: switches to setInterval at ~4-5 FPS (220ms) so background monitoring
- *   never pauses even when the user switches tabs or windows.
+ * - When document.hidden is false: uses requestAnimationFrame capped at ~10 FPS.
+ * - When document.hidden is true: uses Web Worker ticker at ~3.8 FPS (~260ms), immune to tab throttling.
  */
 function startInferenceLoop() {
   stopInferenceLoop();
   if (!state.isMonitoring || state.isPaused) return;
 
+  initTickerWorker();
+
   if (document.hidden) {
-    // Tab is hidden: run background loop at ~4-5 FPS
+    // Tab is hidden: run background Web Worker loop at ~3.8 FPS (~260ms)
     state.isInBackground = true;
-    console.log('[PostureGuard] Tab hidden: running background monitoring at ~4-5 FPS');
-    state.backgroundIntervalId = setInterval(async () => {
-      if (state.isMonitoring && !state.isPaused) {
-        await stepInference(true);
-      }
-    }, BG_INTERVAL_MS);
+    console.log('[PostureGuard] Tab hidden: running Web Worker background ticker at ~3.8 FPS');
+    if (state.tickerWorker) {
+      state.tickerWorker.postMessage({ action: 'start', interval: BG_INTERVAL_MS });
+    }
   } else {
-    // Tab is visible: run requestAnimationFrame loop
+    // Tab is visible: run requestAnimationFrame loop capped at ~10 FPS (every ~100ms)
     state.isInBackground = false;
-    const loop = async () => {
+    let lastForegroundTimestamp = 0;
+
+    const loop = async (timestamp) => {
       if (!state.isMonitoring || state.isPaused || document.hidden) return;
-      await stepInference(false);
+
+      // Cap foreground inference to ~10 FPS (100 ms)
+      if (timestamp - lastForegroundTimestamp >= 95) {
+        lastForegroundTimestamp = timestamp;
+        if (!state.isInferenceBusy) {
+          state.isInferenceBusy = true;
+          try {
+            await stepInference(false);
+          } finally {
+            state.isInferenceBusy = false;
+          }
+        }
+      }
+
       if (!document.hidden && state.isMonitoring && !state.isPaused) {
         state.animationFrameId = requestAnimationFrame(loop);
       }
     };
+
     state.animationFrameId = requestAnimationFrame(loop);
   }
 }
 
 /**
- * Stops both requestAnimationFrame and setInterval loops
+ * Stops both requestAnimationFrame and Web Worker ticker
  */
 function stopInferenceLoop() {
   if (state.animationFrameId) {
     cancelAnimationFrame(state.animationFrameId);
     state.animationFrameId = null;
+  }
+  if (state.tickerWorker) {
+    state.tickerWorker.postMessage({ action: 'stop' });
   }
   if (state.backgroundIntervalId) {
     clearInterval(state.backgroundIntervalId);
@@ -446,19 +640,28 @@ function stopInferenceLoop() {
  */
 function handleVisibilityChange() {
   if (!state.isMonitoring || state.isPaused) return;
-  console.log('[PostureGuard] Visibility changed: document.hidden =', document.hidden);
+  console.log('[PostureGuard] Visibility changed: document.hidden =', document.hidden, 'at', new Date().toLocaleTimeString());
+
+  if (!document.hidden) {
+    requestWakeLock();
+  }
+
   startInferenceLoop();
 }
 
 /**
  * Computes rolling average over last N frames to suppress prediction jitter.
+ * Dynamically adapts window size: 10 frames in foreground (~1.0s), 5 frames in background (~1.3s).
  * Applies detection threshold (>= 80%).
  */
-function processPredictions(predictions, hasPose) {
+function processPredictions(predictions, hasPose, isBackground = false) {
   if (!hasPose || !predictions) {
     setDetectedPosture('No Person Detected', 0);
     return;
   }
+
+  // Adaptive smoothing window: 10 frames in foreground (~10 FPS -> ~1.0s), 5 frames in background (~3.8 FPS -> ~1.3s)
+  state.smoothingWindowSize = (isBackground || document.hidden) ? 5 : 10;
 
   // 1. Push raw frame prediction to smoothing queue
   const frameMap = {};
@@ -467,7 +670,7 @@ function processPredictions(predictions, hasPose) {
   });
 
   state.predictionHistory.push(frameMap);
-  if (state.predictionHistory.length > state.smoothingWindowSize) {
+  while (state.predictionHistory.length > state.smoothingWindowSize) {
     state.predictionHistory.shift();
   }
 
@@ -826,7 +1029,7 @@ function hideAlertBanner() {
 
 /**
  * Checks support for the Document Picture-in-Picture API.
- * If unsupported, hides button and shows desktop note.
+ * If unsupported, hides button and shows informative desktop fallback note.
  */
 function checkPipSupport() {
   const isSupported = ('documentPictureInPicture' in window);
@@ -835,26 +1038,23 @@ function checkPipSupport() {
   }
   if (DOM.pipUnsupportedNote) {
     DOM.pipUnsupportedNote.style.display = isSupported ? 'none' : 'inline-block';
+    DOM.pipUnsupportedNote.textContent = isSupported
+      ? ''
+      : 'Mini window supported in Chrome/Edge. In Firefox/Safari, background audio & desktop notifications alert automatically.';
   }
 }
 
 /**
- * Toggles always-on-top Document Picture-in-Picture window
+ * Opens always-on-top Document Picture-in-Picture window
  */
-async function togglePipWindow() {
+async function openPipWindow() {
   if (!('documentPictureInPicture' in window)) return;
-
-  if (state.pipWindow && !state.pipWindow.closed) {
-    state.pipWindow.close();
-    state.pipWindow = null;
-    updatePipButtonText();
-    return;
-  }
+  if (state.pipWindow && !state.pipWindow.closed) return;
 
   try {
     const pipWindow = await window.documentPictureInPicture.requestWindow({
-      width: 330,
-      height: 220
+      width: 340,
+      height: 230
     });
     state.pipWindow = pipWindow;
 
@@ -871,9 +1071,12 @@ async function togglePipWindow() {
         .badge-bad { background: rgba(120, 53, 15, 0.9); color: #fde68a; border: 1px solid #f59e0b; }
         .badge-neutral { background: rgba(30, 41, 59, 0.9); color: #cbd5e1; border: 1px solid #64748b; }
         .pip-timer { font-family: monospace; font-size: 12px; color: #94a3b8; }
-        .pip-timer.active-alert { color: #f87171; font-weight: bold; }
+        .pip-timer.active-alert { color: #f87171; font-weight: bold; animation: pipPulse 1s infinite alternate; }
+        @keyframes pipPulse { from { opacity: 0.7; } to { opacity: 1; } }
         .pip-footer { display: flex; gap: 8px; justify-content: center; }
-        .btn-pip-stop { background: #ef4444; color: white; border: none; padding: 6px 18px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+        .btn-pip-pause { background: #2563eb; color: white; border: none; padding: 7px 16px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+        .btn-pip-pause:hover { background: #1d4ed8; }
+        .btn-pip-stop { background: #ef4444; color: white; border: none; padding: 7px 16px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
         .btn-pip-stop:hover { background: #dc2626; }
       </style>
     `;
@@ -888,9 +1091,19 @@ async function togglePipWindow() {
         <div id="pipTimer" class="pip-timer">Timer: 0s</div>
       </div>
       <div class="pip-footer">
+        <button id="pipPauseBtn" class="btn-pip-pause">${state.isPaused ? 'Resume' : 'Pause'}</button>
         <button id="pipStopBtn" class="btn-pip-stop">Stop</button>
       </div>
     `;
+
+    pipWindow.document.getElementById('pipPauseBtn').addEventListener('click', () => {
+      if (state.isPaused) {
+        startMonitoring();
+      } else {
+        pauseMonitoring();
+      }
+      updatePipUI();
+    });
 
     pipWindow.document.getElementById('pipStopBtn').addEventListener('click', () => {
       pauseMonitoring();
@@ -913,6 +1126,22 @@ async function togglePipWindow() {
 }
 
 /**
+ * Toggles always-on-top Document Picture-in-Picture window
+ */
+async function togglePipWindow() {
+  if (!('documentPictureInPicture' in window)) return;
+
+  if (state.pipWindow && !state.pipWindow.closed) {
+    state.pipWindow.close();
+    state.pipWindow = null;
+    updatePipButtonText();
+    return;
+  }
+
+  await openPipWindow();
+}
+
+/**
  * Updates content inside Document Picture-in-Picture window
  */
 function updatePipUI() {
@@ -921,6 +1150,7 @@ function updatePipUI() {
   const badgeEl = doc.getElementById('pipBadge');
   const timerEl = doc.getElementById('pipTimer');
   const indicatorEl = doc.getElementById('pipIndicator');
+  const pauseBtn = doc.getElementById('pipPauseBtn');
 
   if (badgeEl) {
     badgeEl.textContent = state.currentActivePosture;
@@ -951,7 +1181,11 @@ function updatePipUI() {
   }
 
   if (indicatorEl) {
-    indicatorEl.textContent = state.isPaused ? '⏸️ Paused' : '🟢 Active';
+    indicatorEl.textContent = state.isPaused ? '⏸️ Paused' : (document.hidden ? '👁️ Background' : '🟢 Active');
+  }
+
+  if (pauseBtn) {
+    pauseBtn.textContent = state.isPaused ? 'Resume' : 'Pause';
   }
 }
 
@@ -1262,10 +1496,14 @@ function generatePersonalizedAdvice(score) {
  * Starts or resumes posture monitoring session
  */
 async function startMonitoring() {
-  // Resume AudioContext on Start button click so beeps work even when the tab is hidden
+  // 1. Resume AudioContext & start silent Web Audio keep-alive track
   resumeAudioContext();
+  startSilentAudio();
 
-  // Ask for Notification permission when user clicks Start
+  // 2. Request Screen Wake Lock to avoid tab suspension
+  requestWakeLock();
+
+  // 3. Request desktop Notification permission upfront when user clicks Start
   if ('Notification' in window && Notification.permission === 'default') {
     try {
       const perm = await Notification.requestPermission();
@@ -1280,6 +1518,15 @@ async function startMonitoring() {
     }
   } else if ('Notification' in window) {
     state.notificationsEnabled = (Notification.permission === 'granted');
+  }
+
+  // 4. Offer/Auto-open Document Picture-in-Picture floating mini widget
+  if ('documentPictureInPicture' in window && (!state.pipWindow || state.pipWindow.closed)) {
+    try {
+      await openPipWindow();
+    } catch (pipErr) {
+      console.warn('[PostureGuard] Auto PiP launch note:', pipErr);
+    }
   }
 
   if (!state.isModelLoaded) {
@@ -1320,6 +1567,8 @@ async function startMonitoring() {
  */
 function pauseMonitoring() {
   state.isPaused = true;
+  releaseWakeLock();
+  stopSilentAudio();
   stopInferenceLoop();
   stopAlarm();
   hideAlertBanner();
@@ -1625,7 +1874,7 @@ function formatTime(totalSeconds) {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
-function updateFPS() {
+function updateFPS(isBackground = false) {
   state.frameCount++;
   const now = performance.now();
   if (now - state.lastFrameTime >= 1000) {
@@ -1633,6 +1882,17 @@ function updateFPS() {
     DOM.fpsDisplay.textContent = `${state.currentFps} FPS`;
     state.frameCount = 0;
     state.lastFrameTime = now;
+  }
+
+  // Periodic telemetry logging every ~10s in console for background validation & test observability
+  if (now - state.lastTelemetryLogTime >= 10000) {
+    state.lastTelemetryLogTime = now;
+    const numTensors = (window.tf && typeof tf.memory === 'function') ? tf.memory().numTensors : 'N/A';
+    console.log(
+      `[PostureGuard Telemetry] Mode: ${isBackground || document.hidden ? 'BACKGROUND (Worker)' : 'FOREGROUND (rAF)'} | ` +
+      `FPS: ~${state.currentFps} | Active Tensors: ${numTensors} | ` +
+      `Posture: "${state.currentActivePosture}" | Time: ${new Date().toLocaleTimeString()}`
+    );
   }
 }
 
