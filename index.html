@@ -652,6 +652,82 @@
 
         </div>
 
+        <!-- Local Posture Streak Card -->
+        <div class="streak-card glass-panel" id="streakCard">
+          <div class="streak-header">
+            <div class="streak-title-wrap">
+              <div class="streak-flame-box" id="streakFlameIcon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"></path>
+                </svg>
+              </div>
+              <div>
+                <span class="streak-badge-label">ERGONOMIC HABIT ENGINE</span>
+                <h3 class="streak-card-title">Daily Posture Streak</h3>
+              </div>
+            </div>
+            <div class="streak-header-actions">
+              <div class="streak-freeze-pill" id="streakFreezePill" title="1 free missed day per week automatically preserves your streak">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M19.07 4.93L4.93 19.07"></path>
+                </svg>
+                <span id="streakFreezesVal">1 Freeze Available</span>
+              </div>
+              <button id="btnResetStreak" class="btn btn-outline btn-sm btn-reset-streak" title="Reset all streak and daily progress data">
+                Reset streak data
+              </button>
+            </div>
+          </div>
+
+          <div class="streak-content-grid">
+            <!-- Left: Current & Best Streak Counters -->
+            <div class="streak-counters-box">
+              <div class="streak-counter-main">
+                <div class="streak-number-row">
+                  <span id="streakCurrentVal" class="streak-number font-mono gradient-number">0</span>
+                  <span class="streak-unit">DAYS</span>
+                </div>
+                <span class="streak-subtext" id="streakStatusText">Goal: 30 min monitored &bull; &ge;60% good posture</span>
+              </div>
+              <div class="streak-best-badge">
+                <span class="best-label">Best Streak:</span>
+                <span id="streakBestVal" class="best-val font-mono">0 days</span>
+              </div>
+            </div>
+
+            <!-- Middle: Today's Progress Toward 30-Minute & 60% Good Goal -->
+            <div class="streak-progress-box">
+              <div class="streak-progress-header">
+                <div class="streak-progress-labels">
+                  <span class="progress-title">Today's Daily Goal Progress</span>
+                  <span id="streakTodayProgressVal" class="progress-time font-mono">0 / 30 min (0%)</span>
+                </div>
+                <span id="streakTodayStatusBadge" class="streak-goal-badge goal-pending">Pending</span>
+              </div>
+
+              <!-- Visual Progress Bar -->
+              <div class="streak-track-wrap">
+                <div class="streak-track">
+                  <div id="streakTodayProgressBar" class="streak-bar-fill" style="width: 0%;"></div>
+                </div>
+              </div>
+
+              <div class="streak-progress-footer">
+                <span id="streakGoodRatioText" class="streak-ratio-detail font-mono">Good Posture: 0% (&ge;60% needed)</span>
+                <span id="streakGoalRuleNote" class="streak-rule-note">Target: 30 min &bull; &ge;60% Good</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Milestones Badges Section -->
+          <div class="streak-milestones-wrap">
+            <span class="milestones-title">Milestone Badges (3, 7, 14, 30 Days)</span>
+            <div class="milestones-grid" id="streakMilestonesList">
+              <!-- Dynamically populated by script.js -->
+            </div>
+          </div>
+        </div>
+
         <!-- Posture Distribution Progress Bar & Timeline Visualizer -->
         <div class="visualizer-grid">
           

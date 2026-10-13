@@ -259,7 +259,22 @@ const DOM = {
   modalStatAlerts: document.getElementById('modalStatAlerts'),
   modalStatThreshold: document.getElementById('modalStatThreshold'),
   modalBreakdownList: document.getElementById('modalBreakdownList'),
-  modalAdviceText: document.getElementById('modalAdviceText')
+  modalAdviceText: document.getElementById('modalAdviceText'),
+
+  // Local Streak Elements
+  streakCard: document.getElementById('streakCard'),
+  streakFlameIcon: document.getElementById('streakFlameIcon'),
+  streakCurrentVal: document.getElementById('streakCurrentVal'),
+  streakBestVal: document.getElementById('streakBestVal'),
+  streakFreezesVal: document.getElementById('streakFreezesVal'),
+  streakFreezePill: document.getElementById('streakFreezePill'),
+  streakStatusText: document.getElementById('streakStatusText'),
+  streakTodayProgressVal: document.getElementById('streakTodayProgressVal'),
+  streakTodayStatusBadge: document.getElementById('streakTodayStatusBadge'),
+  streakTodayProgressBar: document.getElementById('streakTodayProgressBar'),
+  streakGoodRatioText: document.getElementById('streakGoodRatioText'),
+  streakMilestonesList: document.getElementById('streakMilestonesList'),
+  btnResetStreak: document.getElementById('btnResetStreak')
 };
 
 // ============================================================================
@@ -1199,6 +1214,497 @@ function updatePipButtonText() {
 }
 
 // ============================================================================
+// Local Posture Streak Feature
+// ============================================================================
+
+// Easy-to-change constants (Rules: >= 30 min monitored AND >= 60% good posture per calendar day)
+const STREAK_GOAL_MINUTES = 30; // Minimum monitored minutes per calendar day
+const STREAK_MIN_GOOD_RATIO = 0.60; // Minimum 60% of monitored time was good posture
+const STREAK_GOAL_SECONDS = STREAK_GOAL_MINUTES * 60; // 1800 seconds
+const STREAK_STORAGE_KEY = 'postureguard_streak_data_v1';
+
+const STREAK_MILESTONES = [
+  { days: 3, id: 'badge-3', title: 'Bronze Spine', label: '3 Days', icon: '🥉', desc: '3-day consistency' },
+  { days: 7, id: 'badge-7', title: 'Silver Alignment', label: '7 Days', icon: '🥈', desc: '1 week habit' },
+  { days: 14, id: 'badge-14', title: 'Gold Discipline', label: '14 Days', icon: '🥇', desc: '2 continuous weeks' },
+  { days: 30, id: 'badge-30', title: 'Ergonomic Master', label: '30 Days', icon: '👑', desc: '1 full month' }
+];
+
+let streakState = {
+  lastActiveDate: null,       // YYYY-MM-DD of last qualified day
+  currentStreak: 0,
+  bestStreak: 0,
+  freezesLeft: 1,             // 1 free missed day per week
+  lastFreezeRefillWeek: null, // YYYY-Www
+  lastFreezeDate: null,       // YYYY-MM-DD
+  lastReminderDate: null,     // YYYY-MM-DD
+  dailyTotals: {},            // { [dateStr]: { monitoredSeconds: 0, goodSeconds: 0, qualified: false } }
+  activeDay: null,            // current local calendar date string
+  saveCounter: 0
+};
+
+/**
+ * Returns YYYY-MM-DD string in user's local timezone
+ */
+function getLocalDateString(d = new Date()) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Returns calendar date shifted by offsetDays (e.g. -1 for yesterday)
+ */
+function getDaysOffset(dateStr, offsetDays) {
+  if (!dateStr) return '';
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const targetDate = new Date(y, m - 1, d + offsetDays);
+  return getLocalDateString(targetDate);
+}
+
+/**
+ * Returns ISO week identifier (e.g. "2026-W42") in user's local timezone
+ */
+function getWeekIdentifier(date = new Date()) {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const dayNum = d.getDay() || 7;
+  d.setDate(d.getDate() + 4 - dayNum);
+  const yearStart = new Date(d.getFullYear(), 0, 1);
+  const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  return `${d.getFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+}
+
+/**
+ * Computes calendar day difference between two YYYY-MM-DD date strings.
+ * Using UTC midnight dates ensures immunity to DST shifts (23h / 25h).
+ */
+function getDaysBetween(dateStrA, dateStrB) {
+  if (!dateStrA || !dateStrB) return 0;
+  const [y1, m1, d1] = dateStrA.split('-').map(Number);
+  const [y2, m2, d2] = dateStrB.split('-').map(Number);
+  const utcA = Date.UTC(y1, m1 - 1, d1);
+  const utcB = Date.UTC(y2, m2 - 1, d2);
+  const diffDays = Math.round((utcB - utcA) / (86400 * 1000));
+  return Math.max(0, diffDays);
+}
+
+/**
+ * Loads streak data from localStorage wrapped in try/catch
+ */
+function loadStreakData() {
+  const todayStr = getLocalDateString();
+  const currentWeek = getWeekIdentifier();
+  streakState.activeDay = todayStr;
+
+  try {
+    const raw = localStorage.getItem(STREAK_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        streakState.lastActiveDate = parsed.lastActiveDate || null;
+        streakState.currentStreak = Number.isInteger(parsed.currentStreak) ? Math.max(0, parsed.currentStreak) : 0;
+        streakState.bestStreak = Number.isInteger(parsed.bestStreak) ? Math.max(0, parsed.bestStreak) : 0;
+        streakState.freezesLeft = Number.isInteger(parsed.freezesLeft) ? Math.max(0, parsed.freezesLeft) : 1;
+        streakState.lastFreezeRefillWeek = parsed.lastFreezeRefillWeek || null;
+        streakState.lastFreezeDate = parsed.lastFreezeDate || null;
+        streakState.lastReminderDate = parsed.lastReminderDate || null;
+        streakState.dailyTotals = (parsed.dailyTotals && typeof parsed.dailyTotals === 'object') ? parsed.dailyTotals : {};
+      }
+    }
+  } catch (err) {
+    console.warn('[PostureGuard Streak] Could not read streak from localStorage:', err);
+  }
+
+  // Refill freeze: 1 free missed day per week
+  if (streakState.lastFreezeRefillWeek !== currentWeek) {
+    streakState.freezesLeft = 1;
+    streakState.lastFreezeRefillWeek = currentWeek;
+  }
+
+  // Evaluate streak status against today
+  evaluateStreakLiveness(todayStr);
+
+  // Initialize today's record if missing
+  if (!streakState.dailyTotals[todayStr]) {
+    streakState.dailyTotals[todayStr] = { monitoredSeconds: 0, goodSeconds: 0, qualified: false };
+  }
+
+  saveStreakData();
+}
+
+/**
+ * Evaluates whether streak is still alive, frozen, or broken on load/rollover
+ */
+function evaluateStreakLiveness(todayStr) {
+  if (!streakState.lastActiveDate || streakState.currentStreak <= 0) return;
+
+  const gap = getDaysBetween(streakState.lastActiveDate, todayStr);
+  if (gap <= 1) {
+    // 0: Qualified today. 1: Qualified yesterday (or yesterday was protected by freeze). Streak is alive!
+    return;
+  } else if (gap === 2) {
+    // Exactly 1 day was missed (yesterday was skipped).
+    if (streakState.freezesLeft > 0) {
+      // 1 freeze automatically protects the streak
+      streakState.freezesLeft--;
+      const yesterdayStr = getDaysOffset(todayStr, -1);
+      streakState.lastActiveDate = yesterdayStr;
+      streakState.lastFreezeDate = yesterdayStr;
+      if (!streakState.dailyTotals[yesterdayStr]) {
+        streakState.dailyTotals[yesterdayStr] = { monitoredSeconds: 0, goodSeconds: 0, qualified: false, frozen: true };
+      } else {
+        streakState.dailyTotals[yesterdayStr].frozen = true;
+      }
+      console.log('[PostureGuard Streak] 1 freeze automatically applied to keep streak alive.');
+    } else {
+      console.log('[PostureGuard Streak] Streak broken due to missed day with 0 freezes left.');
+      streakState.currentStreak = 0;
+    }
+  } else {
+    // 2 or more days were missed. Even with 1 freeze, streak cannot be bridged.
+    console.log('[PostureGuard Streak] Streak broken due to multiple missed days.');
+    streakState.currentStreak = 0;
+  }
+}
+
+/**
+ * Saves streak data to localStorage wrapped in try/catch
+ */
+function saveStreakData() {
+  try {
+    const dates = Object.keys(streakState.dailyTotals).sort();
+    if (dates.length > 60) {
+      const toDelete = dates.slice(0, dates.length - 60);
+      toDelete.forEach(d => delete streakState.dailyTotals[d]);
+    }
+
+    const payload = {
+      lastActiveDate: streakState.lastActiveDate,
+      currentStreak: streakState.currentStreak,
+      bestStreak: streakState.bestStreak,
+      freezesLeft: streakState.freezesLeft,
+      lastFreezeRefillWeek: streakState.lastFreezeRefillWeek,
+      lastFreezeDate: streakState.lastFreezeDate,
+      lastReminderDate: streakState.lastReminderDate,
+      dailyTotals: streakState.dailyTotals
+    };
+
+    localStorage.setItem(STREAK_STORAGE_KEY, JSON.stringify(payload));
+  } catch (err) {
+    console.warn('[PostureGuard Streak] Could not save streak to localStorage:', err);
+  }
+}
+
+/**
+ * Records one second of active monitoring toward today's streak goal.
+ * Seamlessly handles midnight rollover and sessions spanning two calendar days.
+ */
+function recordStreakSecond(isGood) {
+  const now = new Date();
+  const todayStr = getLocalDateString(now);
+
+  // Handle midnight rollover edge case: session spanning into next calendar day
+  if (streakState.activeDay && streakState.activeDay !== todayStr) {
+    handleMidnightRollover(streakState.activeDay, todayStr);
+    streakState.activeDay = todayStr;
+  }
+
+  if (!streakState.dailyTotals[todayStr]) {
+    streakState.dailyTotals[todayStr] = { monitoredSeconds: 0, goodSeconds: 0, qualified: false };
+  }
+
+  const todayData = streakState.dailyTotals[todayStr];
+  todayData.monitoredSeconds++;
+  if (isGood) {
+    todayData.goodSeconds++;
+  }
+
+  // Check if today qualifies
+  if (!todayData.qualified) {
+    const isDurationMet = todayData.monitoredSeconds >= STREAK_GOAL_SECONDS;
+    const currentRatio = todayData.monitoredSeconds > 0 ? (todayData.goodSeconds / todayData.monitoredSeconds) : 0;
+    const isRatioMet = currentRatio >= STREAK_MIN_GOOD_RATIO;
+
+    if (isDurationMet && isRatioMet) {
+      todayData.qualified = true;
+      applyDayQualification(todayStr);
+    }
+  }
+
+  // Check if evening reminder notification should fire (after 8 PM if allowed and not qualified)
+  checkStreakReminderNotification(now, todayStr);
+
+  // Periodically save to localStorage (every 5 seconds) to minimize disk writes
+  streakState.saveCounter = (streakState.saveCounter + 1) % 5;
+  if (streakState.saveCounter === 0) {
+    saveStreakData();
+  }
+
+  // Update streak UI
+  updateStreakUI();
+}
+
+/**
+ * Handles seamless day transition across midnight during an ongoing session
+ */
+function handleMidnightRollover(prevDayStr, newDayStr) {
+  console.log(`[PostureGuard Streak] Midnight rollover detected: ${prevDayStr} -> ${newDayStr}`);
+
+  const newWeek = getWeekIdentifier();
+  if (streakState.lastFreezeRefillWeek !== newWeek) {
+    streakState.freezesLeft = 1;
+    streakState.lastFreezeRefillWeek = newWeek;
+  }
+
+  const prevData = streakState.dailyTotals[prevDayStr];
+  if (streakState.currentStreak > 0 && (!prevData || !prevData.qualified)) {
+    if (streakState.freezesLeft > 0) {
+      streakState.freezesLeft--;
+      streakState.lastActiveDate = prevDayStr;
+      streakState.lastFreezeDate = prevDayStr;
+      if (!streakState.dailyTotals[prevDayStr]) {
+        streakState.dailyTotals[prevDayStr] = { monitoredSeconds: 0, goodSeconds: 0, qualified: false, frozen: true };
+      } else {
+        streakState.dailyTotals[prevDayStr].frozen = true;
+      }
+      console.log('[PostureGuard Streak] Freeze applied to protect streak across midnight rollover.');
+    } else {
+      streakState.currentStreak = 0;
+      console.log('[PostureGuard Streak] Streak broken at midnight (previous day incomplete with 0 freezes).');
+    }
+  }
+
+  if (!streakState.dailyTotals[newDayStr]) {
+    streakState.dailyTotals[newDayStr] = { monitoredSeconds: 0, goodSeconds: 0, qualified: false };
+  }
+
+  saveStreakData();
+  updateStreakUI();
+}
+
+/**
+ * Applies streak increment when a calendar day's goal is met
+ */
+function applyDayQualification(todayStr) {
+  console.log(`[PostureGuard Streak] Daily goal achieved for ${todayStr}!`);
+
+  if (!streakState.lastActiveDate) {
+    streakState.currentStreak = 1;
+  } else {
+    const gap = getDaysBetween(streakState.lastActiveDate, todayStr);
+    if (gap === 0) {
+      // Already qualified today
+    } else if (gap === 1) {
+      streakState.currentStreak++;
+    } else {
+      streakState.currentStreak = 1;
+    }
+  }
+
+  streakState.lastActiveDate = todayStr;
+  if (streakState.currentStreak > streakState.bestStreak) {
+    streakState.bestStreak = streakState.currentStreak;
+  }
+
+  saveStreakData();
+  updateStreakUI();
+}
+
+/**
+ * Sends notification when streak is about to end (after 8 PM, if notifications allowed)
+ */
+function checkStreakReminderNotification(now, todayStr) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  if (streakState.currentStreak <= 0) return;
+
+  const todayData = streakState.dailyTotals[todayStr];
+  if (todayData && todayData.qualified) return;
+
+  if (now.getHours() >= 20) {
+    if (streakState.lastReminderDate !== todayStr) {
+      try {
+        new Notification('PostureGuard — Streak at Risk! 🔥', {
+          body: `Your ${streakState.currentStreak}-day posture streak will end at midnight! Complete today's 30-min goal to keep it alive.`,
+          icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23f59e0b"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>'
+        });
+        streakState.lastReminderDate = todayStr;
+        saveStreakData();
+      } catch (err) {
+        console.warn('[PostureGuard Streak] Reminder notification error:', err);
+      }
+    }
+  }
+}
+
+/**
+ * Resets all streak data upon user confirmation
+ */
+function resetStreakData() {
+  try {
+    localStorage.removeItem(STREAK_STORAGE_KEY);
+  } catch (err) {
+    console.warn('[PostureGuard Streak] Could not clear localStorage:', err);
+  }
+
+  const todayStr = getLocalDateString();
+  streakState = {
+    lastActiveDate: null,
+    currentStreak: 0,
+    bestStreak: 0,
+    freezesLeft: 1,
+    lastFreezeRefillWeek: getWeekIdentifier(),
+    lastFreezeDate: null,
+    lastReminderDate: null,
+    dailyTotals: {
+      [todayStr]: { monitoredSeconds: 0, goodSeconds: 0, qualified: false }
+    },
+    activeDay: todayStr,
+    saveCounter: 0
+  };
+
+  saveStreakData();
+  updateStreakUI();
+  console.log('[PostureGuard Streak] Streak data successfully reset.');
+}
+
+/**
+ * Updates streak card UI elements
+ */
+function updateStreakUI() {
+  if (!DOM.streakCard) return;
+
+  const todayStr = getLocalDateString();
+  const todayData = streakState.dailyTotals[todayStr] || { monitoredSeconds: 0, goodSeconds: 0, qualified: false };
+
+  // 1. Current and Best Streak
+  if (DOM.streakCurrentVal) DOM.streakCurrentVal.textContent = streakState.currentStreak;
+  if (DOM.streakBestVal) DOM.streakBestVal.textContent = `${streakState.bestStreak} ${streakState.bestStreak === 1 ? 'day' : 'days'}`;
+
+  // Flame Icon Activity Glow
+  if (DOM.streakFlameIcon) {
+    if (streakState.currentStreak > 0 || todayData.qualified) {
+      DOM.streakFlameIcon.classList.add('streak-active');
+    } else {
+      DOM.streakFlameIcon.classList.remove('streak-active');
+    }
+  }
+
+  // 2. Freezes left
+  if (DOM.streakFreezesVal) {
+    if (streakState.freezesLeft > 0) {
+      DOM.streakFreezesVal.textContent = `${streakState.freezesLeft} Freeze Available`;
+      if (DOM.streakFreezePill) DOM.streakFreezePill.classList.remove('freeze-used');
+    } else {
+      DOM.streakFreezesVal.textContent = '0 Freezes (Refills Weekly)';
+      if (DOM.streakFreezePill) DOM.streakFreezePill.classList.add('freeze-used');
+    }
+  }
+
+  // 3. Today's progress
+  const monitoredSec = todayData.monitoredSeconds;
+  const goodSec = todayData.goodSeconds;
+  const monitoredMin = (monitoredSec / 60).toFixed(1);
+  const goalMin = STREAK_GOAL_MINUTES;
+
+  const progressPct = Math.min(100, Math.round((monitoredSec / STREAK_GOAL_SECONDS) * 100));
+  const goodRatio = monitoredSec > 0 ? Math.round((goodSec / monitoredSec) * 100) : 0;
+
+  if (DOM.streakTodayProgressVal) {
+    DOM.streakTodayProgressVal.textContent = `${monitoredMin} / ${goalMin} min (${progressPct}%)`;
+  }
+
+  if (DOM.streakTodayProgressBar) {
+    DOM.streakTodayProgressBar.style.width = `${progressPct}%`;
+    if (todayData.qualified) {
+      DOM.streakTodayProgressBar.classList.add('bar-qualified');
+    } else {
+      DOM.streakTodayProgressBar.classList.remove('bar-qualified');
+    }
+  }
+
+  if (DOM.streakGoodRatioText) {
+    DOM.streakGoodRatioText.textContent = `Good Posture: ${goodRatio}% (${Math.round(STREAK_MIN_GOOD_RATIO * 100)}% needed)`;
+  }
+
+  if (DOM.streakTodayStatusBadge) {
+    if (todayData.qualified) {
+      DOM.streakTodayStatusBadge.textContent = 'Goal Achieved! 🔥';
+      DOM.streakTodayStatusBadge.className = 'streak-goal-badge goal-achieved';
+    } else if (monitoredSec >= STREAK_GOAL_SECONDS && goodRatio < Math.round(STREAK_MIN_GOOD_RATIO * 100)) {
+      DOM.streakTodayStatusBadge.textContent = 'Needs 60% Good Posture';
+      DOM.streakTodayStatusBadge.className = 'streak-goal-badge goal-needs-ratio';
+    } else if (monitoredSec > 0) {
+      DOM.streakTodayStatusBadge.textContent = 'In Progress';
+      DOM.streakTodayStatusBadge.className = 'streak-goal-badge goal-active';
+    } else {
+      DOM.streakTodayStatusBadge.textContent = 'Pending';
+      DOM.streakTodayStatusBadge.className = 'streak-goal-badge goal-pending';
+    }
+  }
+
+  if (DOM.streakStatusText) {
+    if (todayData.qualified) {
+      DOM.streakStatusText.textContent = 'Streak secured for today! Next goal opens tomorrow.';
+    } else if (streakState.currentStreak > 0) {
+      DOM.streakStatusText.textContent = `Complete ${goalMin} min (${Math.round(STREAK_MIN_GOOD_RATIO * 100)}% good) to keep your streak alive!`;
+    } else {
+      DOM.streakStatusText.textContent = `Goal: ${goalMin} min monitored & \u2265${Math.round(STREAK_MIN_GOOD_RATIO * 100)}% good posture`;
+    }
+  }
+
+  // 4. Milestone Badges Rendering
+  renderStreakMilestonesUI();
+}
+
+/**
+ * Renders milestone cards at 3, 7, 14, and 30 days
+ */
+function renderStreakMilestonesUI() {
+  if (!DOM.streakMilestonesList) return;
+
+  DOM.streakMilestonesList.innerHTML = '';
+  const effectiveStreak = Math.max(streakState.currentStreak, streakState.bestStreak);
+
+  STREAK_MILESTONES.forEach(m => {
+    const isEarned = effectiveStreak >= m.days;
+    const card = document.createElement('div');
+    card.className = `milestone-badge-card ${isEarned ? 'is-earned' : 'is-locked'}`;
+
+    const progressText = isEarned
+      ? 'Achieved 🔥'
+      : `${Math.min(effectiveStreak, m.days)} / ${m.days}d`;
+
+    card.innerHTML = `
+      <div class="milestone-icon" aria-hidden="true">${m.icon}</div>
+      <div class="milestone-name">${m.title}</div>
+      <div class="milestone-days">${m.label}</div>
+      <span class="milestone-status-chip ${isEarned ? 'chip-unlocked' : 'chip-locked'}">
+        ${progressText}
+      </span>
+    `;
+
+    DOM.streakMilestonesList.appendChild(card);
+  });
+}
+
+/**
+ * Initializes streak system on startup
+ */
+function initStreakSystem() {
+  loadStreakData();
+  updateStreakUI();
+
+  if (DOM.btnResetStreak) {
+    DOM.btnResetStreak.addEventListener('click', () => {
+      if (confirm('Reset your posture streak data and daily goal progress? This cannot be undone.')) {
+        resetStreakData();
+      }
+    });
+  }
+}
+
+// ============================================================================
 // 5. Session Telemetry & Dashboard Tracking
 // ============================================================================
 
@@ -1228,6 +1734,9 @@ function startSessionTracking() {
     if (state.timelineHistory.length > 60) {
       state.timelineHistory.shift();
     }
+
+    // Record second for local streak engine
+    recordStreakSecond(isGoodPosture(current));
 
     // Update telemetry UI
     updateDashboardUI();
@@ -1379,6 +1888,10 @@ function drawTimelineCanvas() {
  */
 function showSessionSummary() {
   pauseMonitoring();
+
+  // Ensure streak state is saved and streak dashboard UI is fully refreshed
+  saveStreakData();
+  updateStreakUI();
 
   const total = state.activeSessionDuration;
   let goodTime = 0;
@@ -2030,6 +2543,9 @@ function attachEventListeners() {
   checkPipSupport();
   drawTimelineCanvas();
   updateDebugLine('Detecting...', false, 0);
+
+  // Initialize local streak habit engine
+  initStreakSystem();
 }
 
 // Initialize on DOM load
